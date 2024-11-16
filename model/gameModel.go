@@ -3,8 +3,9 @@ package model
 import (
 	pb "SnakeGame/model/proto"
 	"fmt"
-	"google.golang.org/protobuf/proto"
 	"math/rand"
+
+	"google.golang.org/protobuf/proto"
 )
 
 func InitializeGame() (*pb.GameState, *pb.GameConfig) {
