@@ -7,22 +7,20 @@ import (
 )
 
 func main() {
-	//a := app.New()
-	//w := a.NewWindow("Snake Game")
-	//w.Resize(fyne.NewSize(800, 600))
-	//
-	//// главное меню
-	//ui.ShowMainMenu(w)
-	//
-	//// запускаем
-	//w.ShowAndRun()
+	multicastConn := connection.Connection()
+	defer multicastConn.Close()
 
-	multicastAddr, unicastAddr := connection.Connection()
-	defer unicastAddr.Close()
-	defer multicastAddr.Close()
-
-	master := model.NewMaster(multicastAddr, unicastAddr)
+	// Запускаем мастера
+	master := model.NewMaster(multicastConn)
 	master.Start()
 
+	// Задержка, чтобы мастер успел запуститься
+	time.Sleep(1 * time.Second)
+
+	// Запускаем игрока
+	player := model.NewPlayer(multicastConn)
+	player.Start()
+
+	// Даем им пообщаться
 	time.Sleep(30 * time.Second)
 }
