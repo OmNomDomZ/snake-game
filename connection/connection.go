@@ -22,16 +22,5 @@ func Connection() *net.UDPConn {
 		log.Fatalf("Error creating multicast socket: %v", err)
 	}
 
-	// создаем сокет для остальных сообщений
-	//localAddr, err := net.ResolveUDPAddr("udp", ":0")
-	//if err != nil {
-	//	log.Fatalf("Error resolving local UDP address: %v", err)
-	//}
-	//unicastConn, err := net.ListenUDP("udp", localAddr)
-	//if err != nil {
-	//	log.Fatalf("Error creating unicast socket: %v", err)
-	//}
-	//defer unicastConn.Close()
-
 	return multicastConn
 }

@@ -27,12 +27,26 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 		StateDelayMs: proto.Int32(200),
 	}
 
+	localAddr, err := net.ResolveUDPAddr("udp", ":0")
+	if err != nil {
+		log.Fatalf("Error resolving local UDP address: %v", err)
+	}
+	unicastConn, err := net.ListenUDP("udp", localAddr)
+	if err != nil {
+		log.Fatalf("Error creating unicast socket: %v", err)
+	}
+
+	masterIP := unicastConn.LocalAddr().(*net.UDPAddr).IP.String()
+	masterPort := int32(unicastConn.LocalAddr().(*net.UDPAddr).Port)
+
 	player := &pb.GamePlayer{
-		Name:  proto.String("Master"),
-		Id:    proto.Int32(1),
-		Role:  pb.NodeRole_MASTER.Enum(),
-		Type:  pb.PlayerType_HUMAN.Enum(),
-		Score: proto.Int32(0),
+		Name:      proto.String("Master"),
+		Id:        proto.Int32(1),
+		Role:      pb.NodeRole_MASTER.Enum(),
+		Type:      pb.PlayerType_HUMAN.Enum(),
+		Score:     proto.Int32(0),
+		IpAddress: proto.String(masterIP),
+		Port:      proto.Int32(masterPort),
 	}
 
 	players := &pb.GamePlayers{
@@ -53,16 +67,6 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 		GameName: proto.String("Game"),
 	}
 
-	// создаем сокет для остальных сообщений
-	localAddr, err := net.ResolveUDPAddr("udp", ":0")
-	if err != nil {
-		log.Fatalf("Error resolving local UDP address: %v", err)
-	}
-	unicastConn, err := net.ListenUDP("udp", localAddr)
-	if err != nil {
-		log.Fatalf("Error creating unicast socket: %v", err)
-	}
-
 	return &Master{
 		state:            state,
 		config:           config,
@@ -77,6 +81,8 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 
 func (m *Master) Start() {
 	go m.sendAnnouncementMessage()
+	go m.receiveMessages()
+	go m.receiveMulticastMessages()
 }
 
 func (m *Master) sendAnnouncementMessage() {
@@ -92,6 +98,7 @@ func (m *Master) sendAnnouncementMessage() {
 				},
 			},
 		}
+		m.msgSeq++
 
 		data, err := proto.Marshal(msg)
 		if err != nil {
@@ -106,13 +113,62 @@ func (m *Master) sendAnnouncementMessage() {
 		_, err = m.unicastConn.WriteTo(data, multicastUDPAddr)
 		if err != nil {
 			log.Printf("Error sending AnnouncementMsg: %v", err)
-		} else {
-			log.Printf(msg.String())
 		}
 	}
 }
 
-func (m *Master) receiveMsg() {
+func (m *Master) receiveMulticastMessages() {
+	for {
+		buf := make([]byte, 4096)
+		n, addr, err := m.multicastConn.ReadFromUDP(buf)
+		if err != nil {
+			log.Printf("Error receiving multicast message: %v", err)
+			continue
+		}
+
+		var msg pb.GameMessage
+		err = proto.Unmarshal(buf[:n], &msg)
+		if err != nil {
+			log.Printf("Error unmarshalling multicast message: %v", err)
+			continue
+		}
+
+		m.handleMulticastMessage(&msg, addr)
+	}
+}
+
+func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
+	switch t := msg.Type.(type) {
+
+	case *pb.GameMessage_Discover:
+		// пришел DiscoverMsg отправляем AnnouncementMsg
+		response := &pb.GameMessage{
+			MsgSeq: proto.Int64(m.msgSeq),
+			Type: &pb.GameMessage_Announcement{
+				Announcement: &pb.GameMessage_AnnouncementMsg{
+					Games: []*pb.GameAnnouncement{m.announcement},
+				},
+			},
+		}
+		m.msgSeq++
+
+		data, err := proto.Marshal(response)
+		if err != nil {
+			log.Fatalf("Error marshaling response: %v", err)
+			return
+		}
+
+		_, err = m.unicastConn.WriteToUDP(data, addr)
+		if err != nil {
+			log.Fatalf("Error sending response: %v", err)
+			return
+		}
+	default:
+		log.Printf("master: Receive unknown multicast message from %v, type %v", addr, t)
+	}
+}
+
+func (m *Master) receiveMessages() {
 	for {
 		buf := make([]byte, 4096)
 		n, addr, err := m.unicastConn.ReadFromUDP(buf)
@@ -123,6 +179,7 @@ func (m *Master) receiveMsg() {
 
 		var msg pb.GameMessage
 		err = proto.Unmarshal(buf[:n], &msg)
+		log.Printf(msg.String())
 		if err != nil {
 			log.Printf("Error unmarshalling message: %v", err)
 			continue
@@ -134,7 +191,50 @@ func (m *Master) receiveMsg() {
 
 func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch t := msg.Type.(type) {
+	case *pb.GameMessage_Join:
+		// проверяем есть ли место 5*5 для новой змеи
+		joinMsg := t.Join
+		if !m.announcement.GetCanJoin() {
+			log.Printf("Player can not join")
+			// отправляем GameMessage_Error
+		} else {
+			newPlayerID := int32(len(m.players.Players) + 1)
+			newPlayer := &pb.GamePlayer{
+				Name:  proto.String(joinMsg.GetPlayerName()),
+				Id:    proto.Int32(newPlayerID),
+				Role:  joinMsg.GetRequestedRole().Enum(),
+				Type:  joinMsg.GetPlayerType().Enum(),
+				Score: proto.Int32(0),
+			}
+			m.players.Players = append(m.players.Players, newPlayer)
+			m.state.Players = m.players
+
+			ackMsg := &pb.GameMessage{
+				MsgSeq:     proto.Int64(m.msgSeq),
+				SenderId:   proto.Int32(1),
+				ReceiverId: proto.Int32(newPlayerID),
+				Type: &pb.GameMessage_Ack{
+					Ack: &pb.GameMessage_AckMsg{},
+				},
+			}
+			m.msgSeq++
+
+			data, err := proto.Marshal(ackMsg)
+			if err != nil {
+				log.Printf("Error marshalling AckMsg: %v", err)
+				return
+			}
+
+			_, err = m.unicastConn.WriteTo(data, addr)
+			if err != nil {
+				log.Printf("Error sending AckMsg: %v", err)
+				return
+			}
+
+			m.addSnakeForNewPlayer(newPlayerID)
+		}
 	case *pb.GameMessage_Discover:
+		log.Printf("Received DiscoverMsg from %v via unicast", addr)
 		response := &pb.GameMessage{
 			MsgSeq: proto.Int64(m.msgSeq),
 			Type: &pb.GameMessage_Announcement{
@@ -151,53 +251,12 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 			return
 		}
 
-		_, err = m.unicastConn.WriteTo(data, addr)
+		_, err = m.unicastConn.WriteToUDP(data, addr)
 		if err != nil {
 			log.Printf("Error sending AnnouncementMsg: %v", err)
 			return
 		}
-
-	case *pb.GameMessage_Join:
-		// проверяем есть ли место 5*5 для новой змеи
-		joinMsg := t.Join
-		if !m.announcement.GetCanJoin() {
-			// отправляем GameMessage_Error
-		} else {
-			newPlayerID := int32(len(m.players.Players) + 1)
-			newPlayer := &pb.GamePlayer{
-				Name:  proto.String(joinMsg.GetPlayerName()),
-				Id:    proto.Int32(newPlayerID),
-				Role:  joinMsg.GetRequestedRole().Enum(),
-				Type:  joinMsg.GetPlayerType().Enum(),
-				Score: proto.Int32(0),
-			}
-			m.players.Players = append(m.players.Players, newPlayer)
-			m.state.Players = m.players
-
-			response := &pb.GameMessage{
-				MsgSeq:     proto.Int64(m.msgSeq),
-				SenderId:   proto.Int32(1),
-				ReceiverId: proto.Int32(newPlayerID),
-				Type: &pb.GameMessage_Ack{
-					Ack: &pb.GameMessage_AckMsg{},
-				},
-			}
-			m.msgSeq++
-
-			buf, err := proto.Marshal(response)
-			if err != nil {
-				log.Printf("Error marshalling AckMsg: %v", err)
-				return
-			}
-
-			_, err = m.unicastConn.WriteTo(buf, addr)
-			if err != nil {
-				log.Printf("Error sending AckMsg: %v", err)
-				return
-			}
-
-			m.addSnakeForNewPlayer(newPlayerID)
-		}
+		log.Printf("Sent AnnouncementMsg to %v via unicast", addr)
 	default:
 		log.Printf("Received unknown message type from %v", addr)
 	}

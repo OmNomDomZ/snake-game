@@ -5,7 +5,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
-	"time"
 )
 
 type Player struct {
@@ -17,6 +16,7 @@ type Player struct {
 	masterAddr       *net.UDPAddr
 	msgSeq           int64
 	playerInfo       *pb.GamePlayer
+	announcement     *pb.GameMessage_AnnouncementMsg
 }
 
 func NewPlayer(multicastConn *net.UDPConn) *Player {
@@ -47,7 +47,40 @@ func NewPlayer(multicastConn *net.UDPConn) *Player {
 
 func (p *Player) Start() {
 	p.discoverGames()
+	go p.receiveMulticastMessages()
 	go p.receiveMessages()
+}
+
+func (p *Player) receiveMulticastMessages() {
+	for {
+		buf := make([]byte, 4096)
+		n, addr, err := p.multicastConn.ReadFromUDP(buf)
+		if err != nil {
+			log.Printf("Error receiving multicast message: %v", err)
+			continue
+		}
+
+		var msg pb.GameMessage
+		err = proto.Unmarshal(buf[:n], &msg)
+		if err != nil {
+			log.Printf("Error unmarshaling multicast message: %v", err)
+			continue
+		}
+
+		p.handleMulticastMessage(&msg, addr)
+	}
+}
+
+func (p *Player) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
+	switch t := msg.Type.(type) {
+	case *pb.GameMessage_Announcement:
+		p.masterAddr = addr
+		p.announcement = t.Announcement
+		log.Printf("Received AnnouncementMsg from %v via multicast", addr)
+		p.sendJoinRequest()
+	default:
+		log.Printf("Received unknown multicast message from %v", addr)
+	}
 }
 
 func (p *Player) receiveMessages() {
@@ -73,20 +106,22 @@ func (p *Player) receiveMessages() {
 func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Ack:
-		// Обработка AckMsg
-		log.Printf("Received AckMsg from %v", addr)
+		p.playerInfo.Id = proto.Int32(msg.GetReceiverId())
+		log.Printf("Joined game with ID: %d", p.playerInfo.GetId())
+	case *pb.GameMessage_Announcement:
+		p.masterAddr = addr
+		p.announcement = t.Announcement
+		log.Printf("Received AnnouncementMsg from %v via unicast", addr)
+		p.sendJoinRequest()
 	case *pb.GameMessage_State:
-		// Обработка StateMsg
 		p.state = t.State.GetState()
 		log.Printf("Received StateMsg with state_order: %d", p.state.GetStateOrder())
 	case *pb.GameMessage_Error:
-		// Обработка ErrorMsg
 		log.Printf("Error from server: %s", t.Error.GetErrorMessage())
 	case *pb.GameMessage_RoleChange:
-		// Обработка RoleChangeMsg
 		log.Printf("Received RoleChangeMsg")
 	default:
-		log.Printf("Received unknown message type from %v", addr)
+		log.Printf("Received unknown message")
 	}
 }
 
@@ -117,26 +152,7 @@ func (p *Player) discoverGames() {
 		return
 	}
 
-	buf := make([]byte, 4096)
-	p.unicastConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	n, addr, err := p.unicastConn.ReadFromUDP(buf)
-	if err != nil {
-		log.Printf("Error receiving AnnouncmentMsg message: %v", err)
-		return
-	}
-
-	var msg pb.GameMessage
-	err = proto.Unmarshal(buf[:n], &msg)
-	if err != nil {
-		log.Printf("Error unmarshalling AnnouncementMsg message: %v", err)
-		return
-	}
-
-	if _, ok := msg.Type.(*pb.GameMessage_Announcement); ok {
-		p.masterAddr = addr
-		log.Printf("Discovered game at %v", addr)
-		p.sendJoinRequest()
-	}
+	log.Printf("Sent DiscoverMsg to %v", multicastAddr)
 }
 
 func (p *Player) sendJoinRequest() {
@@ -146,7 +162,7 @@ func (p *Player) sendJoinRequest() {
 			Join: &pb.GameMessage_JoinMsg{
 				PlayerType:    pb.PlayerType_HUMAN.Enum(),
 				PlayerName:    p.playerInfo.Name,
-				GameName:      proto.String("Game"),
+				GameName:      proto.String(p.announcement.Games[0].GetGameName()),
 				RequestedRole: pb.NodeRole_NORMAL.Enum(),
 			},
 		},
@@ -159,32 +175,10 @@ func (p *Player) sendJoinRequest() {
 		return
 	}
 
+	// Отправляем JoinMsg мастеру
 	_, err = p.unicastConn.WriteToUDP(data, p.masterAddr)
 	if err != nil {
 		log.Fatalf("Error sending joinMessage: %v", err)
 		return
-	}
-
-	// ждем AckMsg в ответ
-	buf := make([]byte, 4096)
-	p.unicastConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	n, _, err := p.unicastConn.ReadFromUDP(buf)
-	if err != nil {
-		log.Printf("Error receiving AckMsg: %v", err)
-		return
-	}
-
-	var msg pb.GameMessage
-	err = proto.Unmarshal(buf[:n], &msg)
-	if err != nil {
-		log.Printf("Error unmarshalling AckMsg: %v", err)
-		return
-	}
-
-	if _, ok := msg.Type.(*pb.GameMessage_Join); ok {
-		p.playerInfo.Id = proto.Int32(msg.GetReceiverId())
-		log.Printf("Joined game with ID: %d", p.playerInfo.GetId())
-	} else {
-		log.Printf("Unexpected message type after JoinMsg")
 	}
 }
