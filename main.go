@@ -7,6 +7,7 @@ import (
 )
 
 func main() {
+	// TODO: добавить mapper для proto messages
 	multicastConn := connection.Connection()
 	defer multicastConn.Close()
 
