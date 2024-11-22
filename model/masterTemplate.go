@@ -438,5 +438,47 @@ func (m *Master) sendPingMessage() {
 			}
 		}
 	}
+}
 
+// обработка отвалившихся узлов
+func (m *Master) checkTimeouts() {
+	ticker := time.NewTicker(time.Duration(0.8*float64(m.config.GetStateDelayMs())) * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		for playerId, lastInteraction := range m.lastInteraction {
+			if time.Since(lastInteraction) > time.Duration(0.8*float64(m.config.GetStateDelayMs()))*time.Millisecond {
+				log.Printf("player ID: %d has timeout", playerId)
+				m.removePlayer(playerId)
+			}
+		}
+	}
+}
+
+func (m *Master) removePlayer(playerId int32) {
+	delete(m.lastInteraction, playerId)
+
+	var removedPlayer *pb.GamePlayer
+	for _, player := range m.players.Players {
+		if player.GetId() == playerId {
+			removedPlayer = player
+			m.players.Players = append(m.players.Players[:playerId], m.players.Players[playerId+1:]...)
+			break
+		}
+	}
+
+	if removedPlayer.GetRole() == pb.NodeRole_DEPUTY {
+		m.assignNewDeputy()
+	}
+	log.Printf("Player %d removed from game", playerId)
+}
+
+func (m *Master) assignNewDeputy() {
+	for _, player := range m.players.Players {
+		if player.GetRole() == pb.NodeRole_NORMAL {
+			player.Role = pb.NodeRole_DEPUTY.Enum()
+			log.Printf("Player %d is new deputy", player.GetId())
+			break
+		}
+	}
 }
