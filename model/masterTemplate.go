@@ -194,72 +194,18 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Join:
 		// проверяем есть ли место 5*5 для новой змеи
-		joinMsg := t.Join
 		if !m.announcement.GetCanJoin() {
 			log.Printf("Player can not join")
 			// отправляем GameMessage_Error
 		} else {
-			newPlayerID := int32(len(m.players.Players) + 1)
-			newPlayer := &pb.GamePlayer{
-				Name:      proto.String(joinMsg.GetPlayerName()),
-				Id:        proto.Int32(newPlayerID),
-				IpAddress: proto.String(addr.IP.String()),
-				Port:      proto.Int32(int32(addr.Port)),
-				Role:      joinMsg.GetRequestedRole().Enum(),
-				Type:      joinMsg.GetPlayerType().Enum(),
-				Score:     proto.Int32(0),
-			}
-			m.players.Players = append(m.players.Players, newPlayer)
-			m.state.Players = m.players
-
-			ackMsg := &pb.GameMessage{
-				MsgSeq:     proto.Int64(m.msgSeq),
-				SenderId:   proto.Int32(1),
-				ReceiverId: proto.Int32(newPlayerID),
-				Type: &pb.GameMessage_Ack{
-					Ack: &pb.GameMessage_AckMsg{},
-				},
-			}
-			m.msgSeq++
-
-			data, err := proto.Marshal(ackMsg)
-			if err != nil {
-				log.Printf("Error marshalling AckMsg: %v", err)
-				return
-			}
-
-			_, err = m.unicastConn.WriteTo(data, addr)
-			if err != nil {
-				log.Printf("Error sending AckMsg: %v", err)
-				return
-			}
-
-			m.addSnakeForNewPlayer(newPlayerID)
+			// обрабатываем joinMsg
+			joinMsg := t.Join
+			m.handleJoinMessage(joinMsg, addr)
 		}
+
 	case *pb.GameMessage_Discover:
-		log.Printf("Received DiscoverMsg from %v via unicast", addr)
-		announcementMsg := &pb.GameMessage{
-			MsgSeq: proto.Int64(m.msgSeq),
-			Type: &pb.GameMessage_Announcement{
-				Announcement: &pb.GameMessage_AnnouncementMsg{
-					Games: []*pb.GameAnnouncement{m.announcement},
-				},
-			},
-		}
-		m.msgSeq++
+		m.handleDiscoverMessage(addr)
 
-		data, err := proto.Marshal(announcementMsg)
-		if err != nil {
-			log.Printf("Error marshalling AnnouncementMsg: %v", err)
-			return
-		}
-
-		_, err = m.unicastConn.WriteToUDP(data, addr)
-		if err != nil {
-			log.Printf("Error sending AnnouncementMsg: %v", err)
-			return
-		}
-		log.Printf("Sent AnnouncementMsg to %v via unicast", addr)
 	case *pb.GameMessage_Steer:
 		playerId := msg.GetSenderId()
 		if playerId == 0 {
@@ -273,6 +219,71 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	default:
 		log.Printf("Received unknown message type from %v", addr)
 	}
+}
+
+func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UDPAddr) {
+	newPlayerID := int32(len(m.players.Players) + 1)
+	newPlayer := &pb.GamePlayer{
+		Name:      proto.String(joinMsg.GetPlayerName()),
+		Id:        proto.Int32(newPlayerID),
+		IpAddress: proto.String(addr.IP.String()),
+		Port:      proto.Int32(int32(addr.Port)),
+		Role:      joinMsg.GetRequestedRole().Enum(),
+		Type:      joinMsg.GetPlayerType().Enum(),
+		Score:     proto.Int32(0),
+	}
+	m.players.Players = append(m.players.Players, newPlayer)
+	m.state.Players = m.players
+
+	ackMsg := &pb.GameMessage{
+		MsgSeq:     proto.Int64(m.msgSeq),
+		SenderId:   proto.Int32(1),
+		ReceiverId: proto.Int32(newPlayerID),
+		Type: &pb.GameMessage_Ack{
+			Ack: &pb.GameMessage_AckMsg{},
+		},
+	}
+	m.msgSeq++
+
+	data, err := proto.Marshal(ackMsg)
+	if err != nil {
+		log.Printf("Error marshalling AckMsg: %v", err)
+		return
+	}
+
+	_, err = m.unicastConn.WriteTo(data, addr)
+	if err != nil {
+		log.Printf("Error sending AckMsg: %v", err)
+		return
+	}
+
+	m.addSnakeForNewPlayer(newPlayerID)
+}
+
+func (m *Master) handleDiscoverMessage(addr *net.UDPAddr) {
+	log.Printf("Received DiscoverMsg from %v via unicast", addr)
+	announcementMsg := &pb.GameMessage{
+		MsgSeq: proto.Int64(m.msgSeq),
+		Type: &pb.GameMessage_Announcement{
+			Announcement: &pb.GameMessage_AnnouncementMsg{
+				Games: []*pb.GameAnnouncement{m.announcement},
+			},
+		},
+	}
+	m.msgSeq++
+
+	data, err := proto.Marshal(announcementMsg)
+	if err != nil {
+		log.Printf("Error marshalling AnnouncementMsg: %v", err)
+		return
+	}
+
+	_, err = m.unicastConn.WriteToUDP(data, addr)
+	if err != nil {
+		log.Printf("Error sending AnnouncementMsg: %v", err)
+		return
+	}
+	log.Printf("Sent AnnouncementMsg to %v via unicast", addr)
 }
 
 func (m *Master) getPlayerIdByAddress(addr *net.UDPAddr) int32 {
