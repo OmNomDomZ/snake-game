@@ -182,3 +182,28 @@ func (p *Player) sendJoinRequest() {
 		return
 	}
 }
+
+func (p *Player) sendSteerMessage() {
+	steerMsg := &pb.GameMessage{
+		MsgSeq: proto.Int64(p.msgSeq),
+		Type: &pb.GameMessage_Steer{
+			Steer: &pb.GameMessage_SteerMsg{
+				// TODO: поправить направление
+				Direction: pb.Direction_UP.Enum(),
+			},
+		},
+	}
+	p.msgSeq++
+
+	data, err := proto.Marshal(steerMsg)
+	if err != nil {
+		log.Fatalf("Error marshalling steerMessage: %v", err)
+		return
+	}
+
+	_, err = p.unicastConn.WriteToUDP(data, p.masterAddr)
+	if err != nil {
+		log.Fatalf("Error sending steerMessage: %v", err)
+		return
+	}
+}

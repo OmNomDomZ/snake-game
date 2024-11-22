@@ -260,10 +260,70 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 			return
 		}
 		log.Printf("Sent AnnouncementMsg to %v via unicast", addr)
+	case *pb.GameMessage_Steer:
+		playerId := msg.GetSenderId()
+		if playerId == 0 {
+			playerId = m.getPlayerIdByAddress(addr)
+		}
+		if playerId != 0 {
+			m.handleSteerMessage(t.Steer, playerId)
+		} else {
+			log.Printf("SteerMsg received from unknown address: %v", addr)
+		}
 	default:
 		log.Printf("Received unknown message type from %v", addr)
 	}
 }
+
+func (m *Master) getPlayerIdByAddress(addr *net.UDPAddr) int32 {
+	for _, player := range m.players.Players {
+		if player.GetIpAddress() == addr.IP.String() && int(player.GetPort()) == addr.Port {
+			return player.GetId()
+		}
+	}
+	return 0
+}
+
+func (m *Master) handleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId int32) {
+	var snake *pb.GameState_Snake
+	for _, s := range m.state.Snakes {
+		if s.GetPlayerId() == playerId {
+			snake = s
+			break
+		}
+	}
+
+	if snake == nil {
+		log.Printf("No snake found for player ID: %d", playerId)
+		return
+	}
+
+	newDirection := steerMsg.GetDirection()
+	currentDirection := snake.GetHeadDirection()
+
+	isOppositeDirection := func(cur, new pb.Direction) bool {
+		switch cur {
+		case pb.Direction_UP:
+			return new == pb.Direction_DOWN
+		case pb.Direction_DOWN:
+			return new == pb.Direction_UP
+		case pb.Direction_LEFT:
+			return new == pb.Direction_RIGHT
+		case pb.Direction_RIGHT:
+			return new == pb.Direction_LEFT
+		}
+		return false
+	}(currentDirection, newDirection)
+
+	if isOppositeDirection {
+		log.Printf("Invalid direction change from player ID: %d", playerId)
+		return
+	}
+
+	snake.HeadDirection = newDirection.Enum()
+	log.Printf("Player ID: %d changed direction to: %v", playerId, newDirection)
+}
+
 func (m *Master) addSnakeForNewPlayer(playerID int32) {
 	newSnake := &pb.GameState_Snake{
 		PlayerId: proto.Int32(playerID),
