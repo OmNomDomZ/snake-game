@@ -18,6 +18,8 @@ type Master struct {
 	unicastConn      *net.UDPConn
 	announcement     *pb.GameAnnouncement
 	msgSeq           int64
+	// время последнего сообщения от игрока [playerId]time
+	lastInteraction map[int32]time.Time
 }
 
 func NewMaster(multicastConn *net.UDPConn) *Master {
@@ -382,6 +384,58 @@ func (m *Master) sendStateMessage() {
 			log.Printf("Error sending StateMsg: %v to player (ID: %d)", err, player.GetId())
 		} else {
 			log.Printf("Sent StateMsg to player (ID: %d)", player.GetId())
+		}
+	}
+}
+
+func (m *Master) sendPingMessage() {
+	ticker := time.NewTicker(time.Duration(m.config.GetStateDelayMs()/10) * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		for _, player := range m.players.Players {
+			if player.GetRole() == pb.NodeRole_MASTER {
+				continue
+			}
+
+			playerId := player.GetId()
+			playerIp := player.GetIpAddress()
+			playerPort := player.GetPort()
+
+			playerAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(playerIp, strconv.Itoa(int(playerPort))))
+			if err != nil {
+				log.Printf("Error resolving address: %v", err)
+				continue
+			}
+
+			lastInteraction, ok := m.lastInteraction[playerId]
+			if !ok {
+				log.Printf("player ID: %d is not in lastInteraction", playerId)
+				continue
+			}
+
+			if time.Since(lastInteraction) > time.Duration(m.config.GetStateDelayMs()/10)*time.Millisecond {
+				pingMsg := &pb.GameMessage{
+					MsgSeq: proto.Int64(m.msgSeq),
+					Type: &pb.GameMessage_Ping{
+						Ping: &pb.GameMessage_PingMsg{},
+					},
+				}
+				m.msgSeq++
+
+				data, err := proto.Marshal(pingMsg)
+				if err != nil {
+					log.Printf("Error marshalling PingMsg: %v", err)
+					continue
+				}
+
+				_, err = m.unicastConn.WriteToUDP(data, playerAddr)
+				if err != nil {
+					log.Printf("Error sending PingMsg: %v", err)
+				} else {
+					log.Printf("Sent Ping Msg to player (ID: %d)", playerId)
+				}
+			}
 		}
 	}
 
