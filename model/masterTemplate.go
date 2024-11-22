@@ -5,6 +5,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
+	"strconv"
 	"time"
 )
 
@@ -90,7 +91,7 @@ func (m *Master) sendAnnouncementMessage() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		msg := &pb.GameMessage{
+		announcementMsg := &pb.GameMessage{
 			MsgSeq: proto.Int64(1),
 			Type: &pb.GameMessage_Announcement{
 				Announcement: &pb.GameMessage_AnnouncementMsg{
@@ -100,7 +101,7 @@ func (m *Master) sendAnnouncementMessage() {
 		}
 		m.msgSeq++
 
-		data, err := proto.Marshal(msg)
+		data, err := proto.Marshal(announcementMsg)
 		if err != nil {
 			log.Printf("Error marshalling AnnouncementMsg: %v", err)
 			continue
@@ -142,7 +143,7 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 
 	case *pb.GameMessage_Discover:
 		// пришел DiscoverMsg отправляем AnnouncementMsg
-		response := &pb.GameMessage{
+		announcementMsg := &pb.GameMessage{
 			MsgSeq: proto.Int64(m.msgSeq),
 			Type: &pb.GameMessage_Announcement{
 				Announcement: &pb.GameMessage_AnnouncementMsg{
@@ -152,7 +153,7 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 		}
 		m.msgSeq++
 
-		data, err := proto.Marshal(response)
+		data, err := proto.Marshal(announcementMsg)
 		if err != nil {
 			log.Fatalf("Error marshaling response: %v", err)
 			return
@@ -200,11 +201,13 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		} else {
 			newPlayerID := int32(len(m.players.Players) + 1)
 			newPlayer := &pb.GamePlayer{
-				Name:  proto.String(joinMsg.GetPlayerName()),
-				Id:    proto.Int32(newPlayerID),
-				Role:  joinMsg.GetRequestedRole().Enum(),
-				Type:  joinMsg.GetPlayerType().Enum(),
-				Score: proto.Int32(0),
+				Name:      proto.String(joinMsg.GetPlayerName()),
+				Id:        proto.Int32(newPlayerID),
+				IpAddress: proto.String(addr.IP.String()),
+				Port:      proto.Int32(int32(addr.Port)),
+				Role:      joinMsg.GetRequestedRole().Enum(),
+				Type:      joinMsg.GetPlayerType().Enum(),
+				Score:     proto.Int32(0),
 			}
 			m.players.Players = append(m.players.Players, newPlayer)
 			m.state.Players = m.players
@@ -235,7 +238,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		}
 	case *pb.GameMessage_Discover:
 		log.Printf("Received DiscoverMsg from %v via unicast", addr)
-		response := &pb.GameMessage{
+		announcementMsg := &pb.GameMessage{
 			MsgSeq: proto.Int64(m.msgSeq),
 			Type: &pb.GameMessage_Announcement{
 				Announcement: &pb.GameMessage_AnnouncementMsg{
@@ -245,7 +248,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		}
 		m.msgSeq++
 
-		data, err := proto.Marshal(response)
+		data, err := proto.Marshal(announcementMsg)
 		if err != nil {
 			log.Printf("Error marshalling AnnouncementMsg: %v", err)
 			return
@@ -271,4 +274,44 @@ func (m *Master) addSnakeForNewPlayer(playerID int32) {
 	}
 
 	m.state.Snakes = append(m.state.Snakes, newSnake)
+}
+
+func (m *Master) sendStateMessage() {
+	stateMsg := &pb.GameMessage{
+		MsgSeq: proto.Int64(m.msgSeq),
+		Type: &pb.GameMessage_State{
+			State: &pb.GameMessage_StateMsg{
+				State: m.state,
+			},
+		},
+	}
+	m.msgSeq++
+
+	data, err := proto.Marshal(stateMsg)
+	if err != nil {
+		log.Printf("Error marshalling StateMsg: %v", err)
+		return
+	}
+
+	for _, player := range m.players.Players {
+		if player.GetRole() == pb.NodeRole_MASTER {
+			continue
+		}
+
+		playerIp := player.GetIpAddress()
+		playerPort := player.GetPort()
+		playerAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(playerIp, strconv.Itoa(int(playerPort))))
+		if err != nil {
+			log.Printf("Error resolving address: %v", err)
+			continue
+		}
+
+		_, err = m.unicastConn.WriteToUDP(data, playerAddr)
+		if err != nil {
+			log.Printf("Error sending StateMsg: %v to player (ID: %d)", err, player.GetId())
+		} else {
+			log.Printf("Sent StateMsg to player (ID: %d)", player.GetId())
+		}
+	}
+
 }
