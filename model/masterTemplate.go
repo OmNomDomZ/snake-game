@@ -12,6 +12,7 @@ import (
 type Master struct {
 	state            *pb.GameState
 	config           *pb.GameConfig
+	master           *pb.GamePlayer
 	players          *pb.GamePlayers
 	multicastAddress string
 	multicastConn    *net.UDPConn
@@ -42,7 +43,7 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 	masterIP := unicastConn.LocalAddr().(*net.UDPAddr).IP.String()
 	masterPort := int32(unicastConn.LocalAddr().(*net.UDPAddr).Port)
 
-	player := &pb.GamePlayer{
+	master := &pb.GamePlayer{
 		Name:      proto.String("Master"),
 		Id:        proto.Int32(1),
 		Role:      pb.NodeRole_MASTER.Enum(),
@@ -53,7 +54,7 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 	}
 
 	players := &pb.GamePlayers{
-		Players: []*pb.GamePlayer{player},
+		Players: []*pb.GamePlayer{master},
 	}
 
 	state := &pb.GameState{
@@ -73,6 +74,7 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 	return &Master{
 		state:            state,
 		config:           config,
+		master:           master,
 		players:          players,
 		multicastAddress: "239.192.0.4:9192",
 		multicastConn:    multicastConn,
@@ -262,6 +264,18 @@ func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UD
 	m.addSnakeForNewPlayer(newPlayerID)
 }
 
+func (m *Master) addSnakeForNewPlayer(playerID int32) {
+	newSnake := &pb.GameState_Snake{
+		PlayerId: proto.Int32(playerID),
+		Points: []*pb.GameState_Coord{{X: proto.Int32(m.config.GetWidth() / 2),
+			Y: proto.Int32(m.config.GetHeight() / 2)}},
+		State:         pb.GameState_Snake_ALIVE.Enum(),
+		HeadDirection: pb.Direction_RIGHT.Enum(),
+	}
+
+	m.state.Snakes = append(m.state.Snakes, newSnake)
+}
+
 func (m *Master) handleDiscoverMessage(addr *net.UDPAddr) {
 	log.Printf("Received DiscoverMsg from %v via unicast", addr)
 	announcementMsg := &pb.GameMessage{
@@ -337,18 +351,7 @@ func (m *Master) handleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId 
 	log.Printf("Player ID: %d changed direction to: %v", playerId, newDirection)
 }
 
-func (m *Master) addSnakeForNewPlayer(playerID int32) {
-	newSnake := &pb.GameState_Snake{
-		PlayerId: proto.Int32(playerID),
-		Points: []*pb.GameState_Coord{{X: proto.Int32(m.config.GetWidth() / 2),
-			Y: proto.Int32(m.config.GetHeight() / 2)}},
-		State:         pb.GameState_Snake_ALIVE.Enum(),
-		HeadDirection: pb.Direction_RIGHT.Enum(),
-	}
-
-	m.state.Snakes = append(m.state.Snakes, newSnake)
-}
-
+// TODO: добавить в Start()
 func (m *Master) sendStateMessage() {
 	stateMsg := &pb.GameMessage{
 		MsgSeq: proto.Int64(m.msgSeq),
@@ -388,6 +391,7 @@ func (m *Master) sendStateMessage() {
 	}
 }
 
+// TODO: добавить в Start()
 func (m *Master) sendPingMessage() {
 	ticker := time.NewTicker(time.Duration(m.config.GetStateDelayMs()/10) * time.Millisecond)
 	defer ticker.Stop()
@@ -440,6 +444,7 @@ func (m *Master) sendPingMessage() {
 	}
 }
 
+// TODO: добавить в Start()
 // обработка отвалившихся узлов
 func (m *Master) checkTimeouts() {
 	ticker := time.NewTicker(time.Duration(0.8*float64(m.config.GetStateDelayMs())) * time.Millisecond)
@@ -482,3 +487,22 @@ func (m *Master) assignNewDeputy() {
 		}
 	}
 }
+
+// сообщение о смене роли
+//func (m *Master) RoleChangeMessage() {
+//	for _, player := range m.players.Players {
+//		if player.GetRole() == pb.NodeRole_MASTER {
+//			continue
+//		}
+//
+//		roleChangeMsg := &pb.GameMessage{
+//			MsgSeq:     proto.Int64(m.msgSeq),
+//			SenderId:   proto.Int32(m.master.GetId()),
+//			ReceiverId: proto.Int32(player.GetId()),
+//
+//		}
+//	}
+//}
+
+// TODO: сделать обработку сообщения RoleChange
+// TODO: что делать если отвалился мастер
