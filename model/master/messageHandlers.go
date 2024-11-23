@@ -169,10 +169,14 @@ func (m *Master) removePlayer(playerId int32) {
 	delete(m.lastInteraction, playerId)
 
 	var removedPlayer *pb.GamePlayer
-	for _, player := range m.players.Players {
+	for i, player := range m.players.Players {
 		if player.GetId() == playerId {
 			removedPlayer = player
-			m.players.Players = append(m.players.Players[:playerId], m.players.Players[playerId+1:]...)
+
+			if player.GetRole() != pb.NodeRole_VIEWER {
+				// Удаляем только если игрок не VIEWER
+				m.players.Players = append(m.players.Players[:i], m.players.Players[i+1:]...)
+			}
 			break
 		}
 	}
@@ -191,7 +195,7 @@ func (m *Master) removePlayer(playerId int32) {
 	if removedPlayer.GetRole() == pb.NodeRole_VIEWER {
 		m.makeSnakeZombie(playerId)
 	}
-	log.Printf("Player %d removed from game", playerId)
+	log.Printf("Player %d processed for removal or role change", playerId)
 }
 
 func (m *Master) findNewDeputy() {
@@ -251,18 +255,22 @@ func (m *Master) makeSnakeZombie(playerId int32) {
 }
 
 // обработка roleChangeMsg от Deputy
-func (m *Master) handleRoleChangeMessage(roleChangeMsg *pb.GameMessage_RoleChangeMsg) {
+func (m *Master) handleRoleChangeMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
+	roleChangeMsg := msg.GetRoleChange()
+
 	switch {
 	case roleChangeMsg.GetSenderRole() == pb.NodeRole_DEPUTY && roleChangeMsg.GetReceiverRole() == pb.NodeRole_MASTER:
-		// DEPUTY стал MASTER
+		// DEPUTY -> MASTER
 		log.Printf("Deputy has taken over as MASTER. Stopping master.")
 		m.stopMaster()
 
 	case roleChangeMsg.GetReceiverRole() == pb.NodeRole_VIEWER:
-		// Игрок становится VIEWER
-		// get playerId
+		// Player -> VIEWER
+		playerId := msg.GetSenderId()
 		log.Printf("Player ID: %d is now a VIEWER. Converting snake to ZOMBIE.", playerId)
 		m.makeSnakeZombie(playerId)
+	default:
+		log.Printf("Received unknown RoleChangeMsg from player ID: %d", msg.GetSenderId())
 	}
 }
 
@@ -274,5 +282,7 @@ func (m *Master) stopMaster() {
 	// Делаем змею мастера ZOMBIE
 	m.makeSnakeZombie(m.master.GetId())
 
+	m.announcement.CanJoin = proto.Bool(false)
+	// Останавливаем функции мастера
 	log.Println("Master is now a VIEWER. Continuing as an observer.")
 }

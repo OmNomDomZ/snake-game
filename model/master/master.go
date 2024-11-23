@@ -226,8 +226,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		}
 
 	case *pb.GameMessage_RoleChange:
-		roleChangeMsg := t.RoleChange
-		m.handleRoleChangeMessage(roleChangeMsg)
+		m.handleRoleChangeMessage(msg, addr)
 
 	default:
 		log.Printf("Received unknown message type from %v", addr)
