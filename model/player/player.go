@@ -1,4 +1,4 @@
-package model
+package player
 
 import (
 	pb "SnakeGame/model/proto"
@@ -119,9 +119,58 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	case *pb.GameMessage_Error:
 		log.Printf("Error from server: %s", t.Error.GetErrorMessage())
 	case *pb.GameMessage_RoleChange:
-		log.Printf("Received RoleChangeMsg")
+		p.handleRoleChangeMessage(msg)
+	case *pb.GameMessage_Ping:
+		// Отправляем AckMsg в ответ
+		p.sendAck(msg)
 	default:
 		log.Printf("Received unknown message")
+	}
+}
+
+// Любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
+func (p *Player) sendAck(msg *pb.GameMessage) {
+	ackMsg := &pb.GameMessage{
+		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
+		SenderId:   proto.Int32(p.playerInfo.GetId()),
+		ReceiverId: proto.Int32(msg.GetSenderId()),
+		Type: &pb.GameMessage_Ack{
+			Ack: &pb.GameMessage_AckMsg{},
+		},
+	}
+
+	data, err := proto.Marshal(ackMsg)
+	if err != nil {
+		log.Printf("Error marshalling AckMsg: %v", err)
+		return
+	}
+
+	_, err = p.unicastConn.WriteToUDP(data, p.masterAddr)
+	if err != nil {
+		log.Printf("Error sending AckMsg: %v", err)
+		return
+	}
+	log.Printf("Sent AckMsg to %v", p.masterAddr)
+}
+
+func (p *Player) handleRoleChangeMessage(msg *pb.GameMessage) {
+	roleChangeMsg := msg.GetRoleChange()
+	switch {
+	case roleChangeMsg.GetReceiverRole() == pb.NodeRole_DEPUTY:
+		// DEPUTY
+		p.playerInfo.Role = pb.NodeRole_DEPUTY.Enum()
+		log.Printf("Assigned as DEPUTY")
+	case roleChangeMsg.GetReceiverRole() == pb.NodeRole_MASTER:
+		// MASTER
+		p.playerInfo.Role = pb.NodeRole_MASTER.Enum()
+		log.Printf("Assigned as MASTER")
+		// TODO: Implement logic to take over as MASTER
+	case roleChangeMsg.GetReceiverRole() == pb.NodeRole_VIEWER:
+		// VIEWER
+		p.playerInfo.Role = pb.NodeRole_VIEWER.Enum()
+		log.Printf("Assigned as VIEWER")
+	default:
+		log.Printf("Received unknown RoleChangeMsg")
 	}
 }
 
@@ -204,6 +253,55 @@ func (p *Player) sendSteerMessage() {
 	_, err = p.unicastConn.WriteToUDP(data, p.masterAddr)
 	if err != nil {
 		log.Fatalf("Error sending steerMessage: %v", err)
+		return
+	}
+}
+
+func (p *Player) sendPing() {
+	pingMsg := &pb.GameMessage{
+		MsgSeq:   proto.Int64(p.msgSeq),
+		SenderId: proto.Int32(p.playerInfo.GetId()),
+		Type: &pb.GameMessage_Ping{
+			Ping: &pb.GameMessage_PingMsg{},
+		},
+	}
+	p.msgSeq++
+
+	data, err := proto.Marshal(pingMsg)
+	if err != nil {
+		log.Printf("Error marshalling PingMsg: %v", err)
+		return
+	}
+
+	_, err = p.unicastConn.WriteToUDP(data, p.masterAddr)
+	if err != nil {
+		log.Printf("Error sending PingMsg: %v", err)
+		return
+	}
+}
+
+func (p *Player) sendRoleChangeRequest(newRole pb.NodeRole) {
+	roleChangeMsg := &pb.GameMessage{
+		MsgSeq:   proto.Int64(p.msgSeq),
+		SenderId: proto.Int32(p.playerInfo.GetId()),
+		Type: &pb.GameMessage_RoleChange{
+			RoleChange: &pb.GameMessage_RoleChangeMsg{
+				SenderRole:   p.playerInfo.GetRole().Enum(),
+				ReceiverRole: newRole.Enum(),
+			},
+		},
+	}
+	p.msgSeq++
+
+	data, err := proto.Marshal(roleChangeMsg)
+	if err != nil {
+		log.Printf("Error marshalling RoleChangeMsg: %v", err)
+		return
+	}
+
+	_, err = p.unicastConn.WriteToUDP(data, p.masterAddr)
+	if err != nil {
+		log.Printf("Error sending RoleChangeMsg: %v", err)
 		return
 	}
 }

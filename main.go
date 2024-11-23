@@ -2,7 +2,8 @@ package main
 
 import (
 	"SnakeGame/connection"
-	"SnakeGame/model"
+	"SnakeGame/model/master"
+	"SnakeGame/model/player"
 	"time"
 )
 
@@ -12,14 +13,14 @@ func main() {
 	defer multicastConn.Close()
 
 	// Запускаем мастера
-	master := model.NewMaster(multicastConn)
+	master := master.NewMaster(multicastConn)
 	master.Start()
 
 	// Задержка, чтобы мастер успел запуститься
 	time.Sleep(1 * time.Second)
 
 	// Запускаем игрока
-	player := model.NewPlayer(multicastConn)
+	player := player.NewPlayer(multicastConn)
 	player.Start()
 
 	// Даем им пообщаться
