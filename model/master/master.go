@@ -1,6 +1,7 @@
 package master
 
 import (
+	"SnakeGame/model/common"
 	pb "SnakeGame/model/proto"
 	"google.golang.org/protobuf/proto"
 	"log"
@@ -11,15 +12,9 @@ import (
 
 // TODO: добавить генерацию еды
 type Master struct {
-	state            *pb.GameState
-	config           *pb.GameConfig
-	master           *pb.GamePlayer
-	players          *pb.GamePlayers
-	multicastAddress string
-	multicastConn    *net.UDPConn
-	unicastConn      *net.UDPConn
-	announcement     *pb.GameAnnouncement
-	msgSeq           int64
+	node common.Node
+
+	players *pb.GamePlayers
 	// время последнего сообщения от игрока [playerId]time
 	lastInteraction map[int32]time.Time
 }
@@ -73,15 +68,18 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 	}
 
 	return &Master{
-		state:            state,
-		config:           config,
-		master:           master,
-		players:          players,
-		multicastAddress: "239.192.0.4:9192",
-		multicastConn:    multicastConn,
-		unicastConn:      unicastConn,
-		announcement:     announcement,
-		msgSeq:           1,
+		node: common.Node{
+			State:            state,
+			Config:           config,
+			MulticastAddress: "239.192.0.4:9192",
+			MulticastConn:    multicastConn,
+			UnicastConn:      unicastConn,
+			Announcement:     announcement,
+			PlayerInfo:       master,
+			MsgSeq:           1,
+		},
+		players:         players,
+		lastInteraction: map[int32]time.Time{},
 	}
 }
 
@@ -103,23 +101,23 @@ func (m *Master) sendAnnouncementMessage() {
 			MsgSeq: proto.Int64(1),
 			Type: &pb.GameMessage_Announcement{
 				Announcement: &pb.GameMessage_AnnouncementMsg{
-					Games: []*pb.GameAnnouncement{m.announcement},
+					Games: []*pb.GameAnnouncement{m.node.Announcement},
 				},
 			},
 		}
-		m.msgSeq++
+		m.node.MsgSeq++
 
 		data, err := proto.Marshal(announcementMsg)
 		if err != nil {
 			log.Printf("Error marshalling AnnouncementMsg: %v", err)
 			continue
 		}
-		multicastUDPAddr, err := net.ResolveUDPAddr("udp4", m.multicastAddress)
+		multicastUDPAddr, err := net.ResolveUDPAddr("udp4", m.node.MulticastAddress)
 		if err != nil {
 			log.Printf("Error resolving multicast address: %v", err)
 		}
 
-		_, err = m.unicastConn.WriteTo(data, multicastUDPAddr)
+		_, err = m.node.UnicastConn.WriteTo(data, multicastUDPAddr)
 		if err != nil {
 			log.Printf("Error sending AnnouncementMsg: %v", err)
 		}
@@ -129,7 +127,7 @@ func (m *Master) sendAnnouncementMessage() {
 func (m *Master) receiveMulticastMessages() {
 	for {
 		buf := make([]byte, 4096)
-		n, addr, err := m.multicastConn.ReadFromUDP(buf)
+		n, addr, err := m.node.MulticastConn.ReadFromUDP(buf)
 		if err != nil {
 			log.Printf("Error receiving multicast message: %v", err)
 			continue
@@ -152,14 +150,14 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 	case *pb.GameMessage_Discover:
 		// пришел DiscoverMsg отправляем AnnouncementMsg
 		announcementMsg := &pb.GameMessage{
-			MsgSeq: proto.Int64(m.msgSeq),
+			MsgSeq: proto.Int64(m.node.MsgSeq),
 			Type: &pb.GameMessage_Announcement{
 				Announcement: &pb.GameMessage_AnnouncementMsg{
-					Games: []*pb.GameAnnouncement{m.announcement},
+					Games: []*pb.GameAnnouncement{m.node.Announcement},
 				},
 			},
 		}
-		m.msgSeq++
+		m.node.MsgSeq++
 
 		data, err := proto.Marshal(announcementMsg)
 		if err != nil {
@@ -167,20 +165,20 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 			return
 		}
 
-		_, err = m.unicastConn.WriteToUDP(data, addr)
+		_, err = m.node.UnicastConn.WriteToUDP(data, addr)
 		if err != nil {
 			log.Fatalf("Error sending response: %v", err)
 			return
 		}
 	default:
-		log.Printf("master: Receive unknown multicast message from %v, type %v", addr, t)
+		log.Printf("PlayerInfo: Receive unknown multicast message from %v, type %v", addr, t)
 	}
 }
 
 func (m *Master) receiveMessages() {
 	for {
 		buf := make([]byte, 4096)
-		n, addr, err := m.unicastConn.ReadFromUDP(buf)
+		n, addr, err := m.node.UnicastConn.ReadFromUDP(buf)
 		if err != nil {
 			log.Printf("Error receiving message: %v", err)
 			continue
@@ -202,7 +200,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Join:
 		// проверяем есть ли место 5*5 для новой змеи
-		if !m.announcement.GetCanJoin() {
+		if !m.node.Announcement.GetCanJoin() {
 			log.Printf("Player can not join")
 			// отправляем GameMessage_Error
 		} else {
@@ -243,19 +241,19 @@ func (m *Master) getPlayerIdByAddress(addr *net.UDPAddr) int32 {
 }
 
 func (m *Master) sendStateMessage() {
-	ticker := time.NewTicker(time.Duration(m.config.GetStateDelayMs()) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(m.node.Config.GetStateDelayMs()) * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		stateMsg := &pb.GameMessage{
-			MsgSeq: proto.Int64(m.msgSeq),
+			MsgSeq: proto.Int64(m.node.MsgSeq),
 			Type: &pb.GameMessage_State{
 				State: &pb.GameMessage_StateMsg{
-					State: m.state,
+					State: m.node.State,
 				},
 			},
 		}
-		m.msgSeq++
+		m.node.MsgSeq++
 
 		data, err := proto.Marshal(stateMsg)
 		if err != nil {
@@ -276,7 +274,7 @@ func (m *Master) sendStateMessage() {
 				continue
 			}
 
-			_, err = m.unicastConn.WriteToUDP(data, playerAddr)
+			_, err = m.node.UnicastConn.WriteToUDP(data, playerAddr)
 			if err != nil {
 				log.Printf("Error sending StateMsg: %v to player (ID: %d)", err, player.GetId())
 			} else {
@@ -287,7 +285,7 @@ func (m *Master) sendStateMessage() {
 }
 
 func (m *Master) sendPingMessage() {
-	ticker := time.NewTicker(time.Duration(m.config.GetStateDelayMs()/10) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(m.node.Config.GetStateDelayMs()/10) * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -312,14 +310,14 @@ func (m *Master) sendPingMessage() {
 				continue
 			}
 
-			if time.Since(lastInteraction) > time.Duration(m.config.GetStateDelayMs()/10)*time.Millisecond {
+			if time.Since(lastInteraction) > time.Duration(m.node.Config.GetStateDelayMs()/10)*time.Millisecond {
 				pingMsg := &pb.GameMessage{
-					MsgSeq: proto.Int64(m.msgSeq),
+					MsgSeq: proto.Int64(m.node.MsgSeq),
 					Type: &pb.GameMessage_Ping{
 						Ping: &pb.GameMessage_PingMsg{},
 					},
 				}
-				m.msgSeq++
+				m.node.MsgSeq++
 
 				data, err := proto.Marshal(pingMsg)
 				if err != nil {
@@ -327,7 +325,7 @@ func (m *Master) sendPingMessage() {
 					continue
 				}
 
-				_, err = m.unicastConn.WriteToUDP(data, playerAddr)
+				_, err = m.node.UnicastConn.WriteToUDP(data, playerAddr)
 				if err != nil {
 					log.Printf("Error sending PingMsg: %v", err)
 				} else {

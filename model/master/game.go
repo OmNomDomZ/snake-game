@@ -9,15 +9,16 @@ import (
 
 // генерация еды
 func (m *Master) generateFood() {
-	requireFood := m.config.GetFoodStatic() + int32(len(m.players.GetPlayers()))
-	currentFood := int32(len(m.state.GetFoods()))
+	// TODO: написать функцию которая вычисляет только живых игроков
+	requireFood := m.node.Config.GetFoodStatic() + int32(len(m.node.State.Snakes))
+	currentFood := int32(len(m.node.State.GetFoods()))
 
 	if currentFood < requireFood {
 		needNum := requireFood - currentFood
 		for i := int32(0); i < needNum; i++ {
 			coord := m.findEmptyCell()
 			if coord != nil {
-				m.state.Foods = append(m.state.Foods, coord)
+				m.node.State.Foods = append(m.node.State.Foods, coord)
 			} else {
 				log.Println("No empty cells available for new food.")
 				break
@@ -27,20 +28,19 @@ func (m *Master) generateFood() {
 }
 
 func (m *Master) findEmptyCell() *pb.GameState_Coord {
-	numCells := m.config.GetWidth() * m.config.GetHeight()
+	numCells := m.node.Config.GetWidth() * m.node.Config.GetHeight()
 	for attempts := int32(0); attempts < numCells; attempts++ {
-		x := rand.Int31n(m.config.GetWidth())
-		y := rand.Int31n(m.config.GetHeight())
+		x := rand.Int31n(m.node.Config.GetWidth())
+		y := rand.Int31n(m.node.Config.GetHeight())
 		if m.isCellEmpty(x, y) {
-
-			break
+			return &pb.GameState_Coord{X: proto.Int32(x), Y: proto.Int32(y)}
 		}
 	}
 	return nil
 }
 
 func (m *Master) isCellEmpty(x, y int32) bool {
-	for _, snake := range m.state.Snakes {
+	for _, snake := range m.node.State.Snakes {
 		for _, point := range snake.Points {
 			if point.GetX() == x && point.GetY() == y {
 				return false
@@ -48,7 +48,7 @@ func (m *Master) isCellEmpty(x, y int32) bool {
 		}
 	}
 
-	for _, food := range m.state.Foods {
+	for _, food := range m.node.State.Foods {
 		if food.GetX() == x && food.GetY() == y {
 			return false
 		}
@@ -59,7 +59,7 @@ func (m *Master) isCellEmpty(x, y int32) bool {
 
 // обновление состояния игры
 func (m *Master) updateGameState() {
-	for _, snake := range m.state.Snakes {
+	for _, snake := range m.node.State.Snakes {
 		m.moveSnake(snake)
 	}
 
@@ -87,13 +87,13 @@ func (m *Master) moveSnake(snake *pb.GameState_Snake) {
 
 	// поведение при столкновении со стеной
 	if newHead.GetX() < 0 {
-		newHead.X = proto.Int32(m.config.GetWidth() - 1)
-	} else if newHead.GetX() >= m.config.GetWidth() {
+		newHead.X = proto.Int32(m.node.Config.GetWidth() - 1)
+	} else if newHead.GetX() >= m.node.Config.GetWidth() {
 		newHead.X = proto.Int32(0)
 	}
 	if newHead.GetY() < 0 {
-		newHead.Y = proto.Int32(m.config.GetHeight() - 1)
-	} else if newHead.GetY() >= m.config.GetHeight() {
+		newHead.Y = proto.Int32(m.node.Config.GetHeight() - 1)
+	} else if newHead.GetY() >= m.node.Config.GetHeight() {
 		newHead.Y = proto.Int32(0)
 	}
 
@@ -114,9 +114,9 @@ func (m *Master) moveSnake(snake *pb.GameState_Snake) {
 }
 
 func (m *Master) isFoodEaten(head *pb.GameState_Coord) bool {
-	for i, food := range m.state.Foods {
+	for i, food := range m.node.State.Foods {
 		if head.GetX() == food.GetX() && head.GetY() == food.GetY() {
-			m.state.Foods = append(m.state.Foods[:i], m.state.Foods[i+1:]...)
+			m.node.State.Foods = append(m.node.State.Foods[:i], m.node.State.Foods[i+1:]...)
 			return true
 		}
 	}
@@ -124,16 +124,17 @@ func (m *Master) isFoodEaten(head *pb.GameState_Coord) bool {
 }
 
 // проверяем столкновения с другими змеями
+// TODO: проблема с ключем, переделать на string
 func (m *Master) checkCollisions() {
 	heads := make(map[*pb.GameState_Coord]int32)
 
-	for _, snake := range m.state.Snakes {
+	for _, snake := range m.node.State.Snakes {
 		head := snake.Points[0]
 		point := pb.GameState_Coord{X: head.X, Y: head.Y}
 		heads[&point] = snake.GetPlayerId()
 	}
 
-	for _, snake := range m.state.Snakes {
+	for _, snake := range m.node.State.Snakes {
 		for _, point := range snake.Points {
 			for head, crashedPlayerId := range heads {
 				if point.GetX() == head.GetX() && point.GetY() == head.GetY() {
@@ -146,11 +147,11 @@ func (m *Master) checkCollisions() {
 
 // убираем умершую змею
 func (m *Master) killSnake(crashedPlayerId, killer int32) {
-	for _, snake := range m.state.Snakes {
+	for _, snake := range m.node.State.Snakes {
 		if snake.GetPlayerId() == crashedPlayerId {
 			for _, point := range snake.Points {
 				if rand.Float32() < 0.5 {
-					m.state.Foods = append(m.state.Foods, point)
+					m.node.State.Foods = append(m.node.State.Foods, point)
 				}
 			}
 		}
