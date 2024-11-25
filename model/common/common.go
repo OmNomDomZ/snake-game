@@ -2,6 +2,7 @@ package common
 
 import (
 	pb "SnakeGame/model/proto"
+	"fmt"
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
@@ -11,14 +12,14 @@ import (
 
 const MulticastAddr = "239.192.0.4:9192"
 
-// структура для отслеживания неподтвержденных сообщений
+// MessageEntry структура для отслеживания неподтвержденных сообщений
 type MessageEntry struct {
 	msg       *pb.GameMessage
 	addr      *net.UDPAddr
 	timestamp time.Time
 }
 
-// общая структура для хранения информации об игроке или мастере
+// Node общая структура для хранения информации об игроке или мастере
 type Node struct {
 	State            *pb.GameState
 	Config           *pb.GameConfig
@@ -48,7 +49,7 @@ func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPC
 	}
 }
 
-// Любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
+// SendAck любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
 func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
 	ackMsg := &pb.GameMessage{
 		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
@@ -82,19 +83,8 @@ func (n *Node) SendPing(addr *net.UDPAddr) {
 			Ping: &pb.GameMessage_PingMsg{},
 		},
 	}
-	n.MsgSeq++
 
-	data, err := proto.Marshal(pingMsg)
-	if err != nil {
-		log.Printf("Error marshalling PingMsg: %v", err)
-		return
-	}
-
-	_, err = n.UnicastConn.WriteToUDP(data, addr)
-	if err != nil {
-		log.Printf("Error sending PingMsg: %v", err)
-		return
-	}
+	n.SendMessage(pingMsg, addr)
 }
 
 // SendMessage отправка сообщения и добавление его в неподтверждённые
@@ -146,12 +136,61 @@ func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
 
 	for {
 		select {
+		// ответ не пришел, заново отправляем сообщение
 		case <-ticker.C:
-			//now := time.Now()
+			now := time.Now()
 			n.mu.Lock()
+			for seq, entry := range n.unconfirmedMessages {
+				if now.Sub(entry.timestamp) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
+					// переотправка сообщения
+					data, err := proto.Marshal(entry.msg)
+					if err != nil {
+						log.Printf("Error marshalling Message: %v", err)
+						continue
+					}
+					_, err = n.UnicastConn.WriteToUDP(data, entry.addr)
+					if err != nil {
+						fmt.Printf("Error sending Message: %v", err)
+						continue
+					}
+
+					entry.timestamp = time.Now()
+					log.Printf("Resent message with Seq: %d to %v", seq, entry.addr)
+				}
+			}
+			n.mu.Unlock()
+		// ответ пришел, удаляем из мапы
 		case seq := <-n.ackChan:
 			n.HandleAck(seq)
 		}
+	}
+}
+
+// SendPings отправка PingMsg, если не было отправлено сообщений в течение stateDelayMs/10
+func (n *Node) SendPings(stateDelayMs int32, lastSent map[string]time.Time) {
+	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		now := time.Now()
+		n.mu.Lock()
+		for _, player := range n.State.Players.Players {
+			if player.GetId() == n.PlayerInfo.GetId() {
+				continue
+			}
+			addrKey := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
+			last, exists := lastSent[addrKey]
+			if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
+				playerAddr, err := net.ResolveUDPAddr("udp", addrKey)
+				if err != nil {
+					log.Printf("Error resolving address for Ping: %v", err)
+					continue
+				}
+				n.SendPing(playerAddr)
+				lastSent[addrKey] = now
+			}
+		}
+		n.mu.Unlock()
 	}
 }
 
