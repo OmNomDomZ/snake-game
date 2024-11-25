@@ -14,12 +14,12 @@ type Node struct {
 	MulticastAddress string
 	MulticastConn    *net.UDPConn
 	UnicastConn      *net.UDPConn
-	Announcement     *pb.GameAnnouncement
-	PlayerInfo       *pb.GamePlayer
-	MsgSeq           int64
+	//Announcement     *pb.GameAnnouncement
+	PlayerInfo *pb.GamePlayer
+	MsgSeq     int64
 }
 
-// отправка AckMsg в ответ на полученное сообщение
+// Любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
 func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
 	ackMsg := &pb.GameMessage{
 		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
@@ -44,29 +44,29 @@ func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
 	log.Printf("Sent AckMsg to %v", addr)
 }
 
-//// отправка PingMsg
-//func (n *Node) SendPing(addr *net.UDPAddr) {
-//	pingMsg := &pb.GameMessage{
-//		MsgSeq:   proto.Int64(n.MsgSeq),
-//		SenderId: proto.Int32(n.PlayerInfo.GetId()),
-//		Type: &pb.GameMessage_Ping{
-//			Ping: &pb.GameMessage_PingMsg{},
-//		},
-//	}
-//	n.MsgSeq++
-//
-//	data, err := proto.Marshal(pingMsg)
-//	if err != nil {
-//		log.Printf("Error marshalling PingMsg: %v", err)
-//		return
-//	}
-//
-//	_, err = n.UnicastConn.WriteToUDP(data, addr)
-//	if err != nil {
-//		log.Printf("Error sending PingMsg: %v", err)
-//		return
-//	}
-//}
+// // отправка PingMsg
+func (n *Node) SendPing(addr *net.UDPAddr) {
+	pingMsg := &pb.GameMessage{
+		MsgSeq:   proto.Int64(n.MsgSeq),
+		SenderId: proto.Int32(n.PlayerInfo.GetId()),
+		Type: &pb.GameMessage_Ping{
+			Ping: &pb.GameMessage_PingMsg{},
+		},
+	}
+	n.MsgSeq++
+
+	data, err := proto.Marshal(pingMsg)
+	if err != nil {
+		log.Printf("Error marshalling PingMsg: %v", err)
+		return
+	}
+
+	_, err = n.UnicastConn.WriteToUDP(data, addr)
+	if err != nil {
+		log.Printf("Error sending PingMsg: %v", err)
+		return
+	}
+}
 
 //// обработка SteerMsg
 //func (n *Node) HandleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId int32) {

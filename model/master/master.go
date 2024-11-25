@@ -14,7 +14,8 @@ import (
 type Master struct {
 	node common.Node
 
-	players *pb.GamePlayers
+	announcement *pb.GameAnnouncement
+	players      *pb.GamePlayers
 	// время последнего сообщения от игрока [playerId]time
 	lastInteraction map[int32]time.Time
 }
@@ -74,10 +75,10 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 			MulticastAddress: "239.192.0.4:9192",
 			MulticastConn:    multicastConn,
 			UnicastConn:      unicastConn,
-			Announcement:     announcement,
 			PlayerInfo:       master,
 			MsgSeq:           1,
 		},
+		announcement:    announcement,
 		players:         players,
 		lastInteraction: map[int32]time.Time{},
 	}
@@ -101,7 +102,7 @@ func (m *Master) sendAnnouncementMessage() {
 			MsgSeq: proto.Int64(1),
 			Type: &pb.GameMessage_Announcement{
 				Announcement: &pb.GameMessage_AnnouncementMsg{
-					Games: []*pb.GameAnnouncement{m.node.Announcement},
+					Games: []*pb.GameAnnouncement{m.announcement},
 				},
 			},
 		}
@@ -153,7 +154,7 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 			MsgSeq: proto.Int64(m.node.MsgSeq),
 			Type: &pb.GameMessage_Announcement{
 				Announcement: &pb.GameMessage_AnnouncementMsg{
-					Games: []*pb.GameAnnouncement{m.node.Announcement},
+					Games: []*pb.GameAnnouncement{m.announcement},
 				},
 			},
 		}
@@ -200,7 +201,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Join:
 		// проверяем есть ли место 5*5 для новой змеи
-		if !m.node.Announcement.GetCanJoin() {
+		if !m.announcement.GetCanJoin() {
 			log.Printf("Player can not join")
 			// отправляем GameMessage_Error
 		} else {
@@ -311,26 +312,7 @@ func (m *Master) sendPingMessage() {
 			}
 
 			if time.Since(lastInteraction) > time.Duration(m.node.Config.GetStateDelayMs()/10)*time.Millisecond {
-				pingMsg := &pb.GameMessage{
-					MsgSeq: proto.Int64(m.node.MsgSeq),
-					Type: &pb.GameMessage_Ping{
-						Ping: &pb.GameMessage_PingMsg{},
-					},
-				}
-				m.node.MsgSeq++
-
-				data, err := proto.Marshal(pingMsg)
-				if err != nil {
-					log.Printf("Error marshalling PingMsg: %v", err)
-					continue
-				}
-
-				_, err = m.node.UnicastConn.WriteToUDP(data, playerAddr)
-				if err != nil {
-					log.Printf("Error sending PingMsg: %v", err)
-				} else {
-					log.Printf("Sent Ping Msg to player (ID: %d)", playerId)
-				}
+				m.node.SendPing(playerAddr)
 			}
 		}
 	}
