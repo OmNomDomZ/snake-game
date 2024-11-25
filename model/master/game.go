@@ -2,6 +2,7 @@ package master
 
 import (
 	pb "SnakeGame/model/proto"
+	"fmt"
 	"google.golang.org/protobuf/proto"
 	"log"
 	"math/rand"
@@ -124,21 +125,44 @@ func (m *Master) isFoodEaten(head *pb.GameState_Coord) bool {
 }
 
 // проверяем столкновения с другими змеями
-// TODO: проблема с ключем, переделать на string
 func (m *Master) checkCollisions() {
-	heads := make(map[*pb.GameState_Coord]int32)
+	heads := make(map[string]int32)
 
 	for _, snake := range m.node.State.Snakes {
 		head := snake.Points[0]
-		point := pb.GameState_Coord{X: head.X, Y: head.Y}
-		heads[&point] = snake.GetPlayerId()
+		point := fmt.Sprintf("%d,%d", head.GetX(), head.GetY())
+		heads[point] = snake.GetPlayerId()
 	}
 
+	// проверяем, есть ли клетки с более чем одной головой
+	for key := range heads {
+		count := 0
+		var crashedPlayers []int32
+		for k, pid := range heads {
+			if k == key {
+				count++
+				crashedPlayers = append(crashedPlayers, pid)
+			}
+		}
+		// несколько голов на одной клетке -- все погибают
+		if count > 1 {
+			for _, pid := range crashedPlayers {
+				m.killSnake(pid, pid)
+			}
+		}
+	}
+
+	// проверяем столкновения головы змейки с телом других змей
 	for _, snake := range m.node.State.Snakes {
-		for _, point := range snake.Points {
-			for head, crashedPlayerId := range heads {
+		head := snake.Points[0]
+		for _, otherSnake := range m.node.State.Snakes {
+			if otherSnake.GetPlayerId() == snake.GetPlayerId() {
+				continue
+			}
+			for _, point := range otherSnake.Points {
 				if point.GetX() == head.GetX() && point.GetY() == head.GetY() {
-					m.killSnake(crashedPlayerId, snake.GetPlayerId())
+					m.killSnake(snake.GetPlayerId(), otherSnake.GetPlayerId())
+					break
 				}
 			}
 		}

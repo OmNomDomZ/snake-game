@@ -90,7 +90,7 @@ func (m *Master) handleDiscoverMessage(addr *net.UDPAddr) {
 		MsgSeq: proto.Int64(m.node.MsgSeq),
 		Type: &pb.GameMessage_Announcement{
 			Announcement: &pb.GameMessage_AnnouncementMsg{
-				Games: []*pb.GameAnnouncement{m.node.Announcement},
+				Games: []*pb.GameAnnouncement{m.announcement},
 			},
 		},
 	}
@@ -282,7 +282,7 @@ func (m *Master) stopMaster() {
 	// Делаем змею мастера ZOMBIE
 	m.makeSnakeZombie(m.node.PlayerInfo.GetId())
 
-	m.node.Announcement.CanJoin = proto.Bool(false)
+	m.announcement.CanJoin = proto.Bool(false)
 	// Останавливаем функции мастера
 	log.Println("Master is now a VIEWER. Continuing as an observer.")
 }
