@@ -12,7 +12,7 @@ import (
 
 // TODO: добавить генерацию еды
 type Master struct {
-	node common.Node
+	node *common.Node
 
 	announcement *pb.GameAnnouncement
 	players      *pb.GamePlayers
@@ -183,15 +183,28 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		// проверяем есть ли место 5*5 для новой змеи
 		if !m.announcement.GetCanJoin() {
 			log.Printf("Player can not join")
-			// отправляем GameMessage_Error
+			log.Printf("Player cannot join: no available space")
+			errorMsg := &pb.GameMessage{
+				Type: &pb.GameMessage_Error{
+					Error: &pb.GameMessage_ErrorMsg{
+						ErrorMessage: proto.String("Cannot join: no available space"),
+					},
+				},
+			}
+			m.node.SendMessage(errorMsg, addr)
 		} else {
 			// обрабатываем joinMsg
 			joinMsg := t.Join
 			m.handleJoinMessage(joinMsg, addr)
 		}
 
+		m.node.SendAck(msg, addr)
+		m.lastInteraction[msg.GetSenderId()] = time.Now()
+
 	case *pb.GameMessage_Discover:
 		m.handleDiscoverMessage(addr)
+		m.node.SendAck(msg, addr)
+		m.lastInteraction[msg.GetSenderId()] = time.Now()
 
 	case *pb.GameMessage_Steer:
 		playerId := msg.GetSenderId()
@@ -200,6 +213,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		}
 		if playerId != 0 {
 			m.handleSteerMessage(t.Steer, playerId)
+			m.node.SendAck(msg, addr)
 			m.lastInteraction[playerId] = time.Now()
 		} else {
 			log.Printf("SteerMsg received from unknown address: %v", addr)
@@ -207,7 +221,15 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 
 	case *pb.GameMessage_RoleChange:
 		m.handleRoleChangeMessage(msg, addr)
+		m.node.SendAck(msg, addr)
 		m.lastInteraction[msg.GetSenderId()] = time.Now()
+
+	case *pb.GameMessage_Ping:
+		m.node.SendAck(msg, addr)
+		m.lastInteraction[msg.GetSenderId()] = time.Now()
+
+	case *pb.GameMessage_Ack:
+		m.node.AckChan <- msg.GetMsgSeq()
 
 	default:
 		log.Printf("Received unknown message type from %v", addr)

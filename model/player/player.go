@@ -116,6 +116,8 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Ack:
 		p.node.PlayerInfo.Id = proto.Int32(msg.GetReceiverId())
+		p.node.AckChan <- msg.GetMsgSeq()
+		p.lastInteraction[msg.GetSenderId()] = time.Now()
 		log.Printf("Joined game with ID: %d", p.node.PlayerInfo.GetId())
 	case *pb.GameMessage_Announcement:
 		p.masterAddr = addr
@@ -124,15 +126,21 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		p.sendJoinRequest()
 	case *pb.GameMessage_State:
 		p.node.State = t.State.GetState()
+		p.node.SendAck(msg, addr)
 		log.Printf("Received StateMsg with state_order: %d", p.node.State.GetStateOrder())
+		p.lastInteraction[msg.GetSenderId()] = time.Now()
 		// Обновить интерфейс пользователя (интегрировать с UI)
 	case *pb.GameMessage_Error:
+		p.node.SendAck(msg, addr)
 		log.Printf("Error from server: %s", t.Error.GetErrorMessage())
 	case *pb.GameMessage_RoleChange:
 		p.handleRoleChangeMessage(msg)
+		p.node.SendAck(msg, addr)
+		p.lastInteraction[msg.GetSenderId()] = time.Now()
 	case *pb.GameMessage_Ping:
 		// Отправляем AckMsg в ответ
 		p.node.SendAck(msg, addr)
+		p.lastInteraction[msg.GetSenderId()] = time.Now()
 	default:
 		log.Printf("Received unknown message")
 	}

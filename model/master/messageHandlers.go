@@ -138,27 +138,30 @@ func (m *Master) checkTimeouts() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		now := time.Now()
+		m.node.Mu.Lock()
 		for playerId, lastInteraction := range m.lastInteraction {
-			if time.Since(lastInteraction) > time.Duration(0.8*float64(m.node.Config.GetStateDelayMs()))*time.Millisecond {
+			if now.Sub(lastInteraction) > time.Duration(0.8*float64(m.node.Config.GetStateDelayMs()))*time.Millisecond {
 				log.Printf("player ID: %d has timeout", playerId)
 				m.removePlayer(playerId)
 			}
 		}
+		m.node.Mu.Unlock()
 	}
 }
 
 func (m *Master) removePlayer(playerId int32) {
+	m.node.Mu.Lock()
+	defer m.node.Mu.Unlock()
+
 	delete(m.lastInteraction, playerId)
 
 	var removedPlayer *pb.GamePlayer
+	var index int
 	for i, player := range m.players.Players {
 		if player.GetId() == playerId {
 			removedPlayer = player
-
-			if player.GetRole() != pb.NodeRole_VIEWER {
-				// Удаляем только если игрок не VIEWER
-				m.players.Players = append(m.players.Players[:i], m.players.Players[i+1:]...)
-			}
+			index = i
 			break
 		}
 	}
@@ -166,6 +169,11 @@ func (m *Master) removePlayer(playerId int32) {
 	if removedPlayer == nil {
 		log.Printf("Player ID: %d not found for removal", playerId)
 		return
+	}
+
+	if removedPlayer.GetRole() != pb.NodeRole_VIEWER {
+		// Удаляем только если игрок не VIEWER
+		m.players.Players = append(m.players.Players[:index], m.players.Players[index+1:]...)
 	}
 
 	// Если игрок был DEPUTY, назначаем нового
@@ -177,7 +185,7 @@ func (m *Master) removePlayer(playerId int32) {
 	if removedPlayer.GetRole() == pb.NodeRole_VIEWER {
 		m.makeSnakeZombie(playerId)
 	}
-	log.Printf("Player %d processed for removal or role change", playerId)
+	log.Printf("Player ID: %d processed for removal or role change", playerId)
 }
 
 func (m *Master) findNewDeputy() {

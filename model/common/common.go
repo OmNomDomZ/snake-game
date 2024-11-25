@@ -30,8 +30,8 @@ type Node struct {
 	MsgSeq           int64
 
 	unconfirmedMessages map[int64]*MessageEntry
-	mu                  sync.Mutex
-	ackChan             chan int64
+	Mu                  sync.Mutex
+	AckChan             chan int64
 }
 
 func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPConn,
@@ -45,12 +45,17 @@ func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPC
 		PlayerInfo:          playerInfo,
 		MsgSeq:              1,
 		unconfirmedMessages: make(map[int64]*MessageEntry),
-		ackChan:             make(chan int64),
+		AckChan:             make(chan int64),
 	}
 }
 
 // SendAck любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
 func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
+	switch msg.Type.(type) {
+	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
+		return
+	}
+
 	ackMsg := &pb.GameMessage{
 		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
 		SenderId:   proto.Int32(n.PlayerInfo.GetId()),
@@ -90,9 +95,10 @@ func (n *Node) SendPing(addr *net.UDPAddr) {
 // SendMessage отправка сообщения и добавление его в неподтверждённые
 func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	// увеличиваем порядковый номер сообщения
-	n.mu.Lock()
-	msg.MsgSeq = proto.Int64(msg.GetMsgSeq() + 1)
-	n.mu.Unlock()
+	n.Mu.Lock()
+	msg.MsgSeq = proto.Int64(n.MsgSeq)
+	n.MsgSeq++
+	n.Mu.Unlock()
 
 	// отправляем
 	data, err := proto.Marshal(msg)
@@ -108,21 +114,25 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	}
 
 	// добавляем сообщение в неподтверждённые
-	n.mu.Lock()
-	n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
-		msg:       msg,
-		addr:      addr,
-		timestamp: time.Now(),
+	switch msg.Type.(type) {
+	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
+	default:
+		n.Mu.Lock()
+		n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
+			msg:       msg,
+			addr:      addr,
+			timestamp: time.Now(),
+		}
+		n.Mu.Unlock()
 	}
-	n.mu.Unlock()
 
 	log.Printf("Sent message with Seq: %d to %v", msg.GetMsgSeq(), addr)
 }
 
 // HandleAck обработка полученных AckMsg
 func (n *Node) HandleAck(seq int64) {
-	n.mu.Lock()
-	defer n.mu.Unlock()
+	n.Mu.Lock()
+	defer n.Mu.Unlock()
 	if _, exists := n.unconfirmedMessages[seq]; exists {
 		delete(n.unconfirmedMessages, seq)
 		log.Printf("Received Ack for Seq: %d", seq)
@@ -139,7 +149,7 @@ func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
 		// ответ не пришел, заново отправляем сообщение
 		case <-ticker.C:
 			now := time.Now()
-			n.mu.Lock()
+			n.Mu.Lock()
 			for seq, entry := range n.unconfirmedMessages {
 				if now.Sub(entry.timestamp) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
 					// переотправка сообщения
@@ -158,9 +168,9 @@ func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
 					log.Printf("Resent message with Seq: %d to %v", seq, entry.addr)
 				}
 			}
-			n.mu.Unlock()
+			n.Mu.Unlock()
 		// ответ пришел, удаляем из мапы
-		case seq := <-n.ackChan:
+		case seq := <-n.AckChan:
 			n.HandleAck(seq)
 		}
 	}
@@ -173,7 +183,7 @@ func (n *Node) SendPings(stateDelayMs int32, lastSent map[string]time.Time) {
 
 	for range ticker.C {
 		now := time.Now()
-		n.mu.Lock()
+		n.Mu.Lock()
 		for _, player := range n.State.Players.Players {
 			if player.GetId() == n.PlayerInfo.GetId() {
 				continue
@@ -190,7 +200,7 @@ func (n *Node) SendPings(stateDelayMs int32, lastSent map[string]time.Time) {
 				lastSent[addrKey] = now
 			}
 		}
-		n.mu.Unlock()
+		n.Mu.Unlock()
 	}
 }
 
