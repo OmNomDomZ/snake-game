@@ -6,13 +6,18 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
+	"time"
 )
 
 type Player struct {
-	node common.Node
+	node *common.Node
 
 	announcementMsg *pb.GameMessage_AnnouncementMsg
 	masterAddr      *net.UDPAddr
+	// время последнего сообщения от игрока [playerId]time
+	lastInteraction map[int32]time.Time
+	// для отслеживания отправок сообщений
+	lastSent map[string]time.Time
 }
 
 func NewPlayer(multicastConn *net.UDPConn) *Player {
@@ -26,20 +31,22 @@ func NewPlayer(multicastConn *net.UDPConn) *Player {
 		log.Fatalf("Error creating unicast socket: %v", err)
 	}
 
+	playerInfo := &pb.GamePlayer{
+		Name:  proto.String("Player"),
+		Id:    proto.Int32(0),
+		Role:  pb.NodeRole_NORMAL.Enum(),
+		Type:  pb.PlayerType_HUMAN.Enum(),
+		Score: proto.Int32(0),
+	}
+
+	node := common.NewNode(nil, nil, multicastConn, unicastConn, playerInfo)
+
 	return &Player{
-		node: common.Node{
-			MulticastAddress: "239.192.0.4:9192",
-			MulticastConn:    multicastConn,
-			UnicastConn:      unicastConn,
-			PlayerInfo: &pb.GamePlayer{
-				Name:  proto.String("Player"),
-				Id:    proto.Int32(0),
-				Role:  pb.NodeRole_NORMAL.Enum(),
-				Type:  pb.PlayerType_HUMAN.Enum(),
-				Score: proto.Int32(0),
-			},
-			MsgSeq: 1,
-		},
+		node:            node,
+		announcementMsg: nil,
+		masterAddr:      nil,
+		lastInteraction: make(map[int32]time.Time),
+		lastSent:        make(map[string]time.Time),
 	}
 }
 
@@ -47,6 +54,8 @@ func (p *Player) Start() {
 	p.discoverGames()
 	go p.receiveMulticastMessages()
 	go p.receiveMessages()
+	go p.node.ResendUnconfirmedMessages(p.node.Config.GetStateDelayMs())
+	go p.node.SendPings(p.node.Config.GetStateDelayMs(), p.lastSent)
 }
 
 func (p *Player) receiveMulticastMessages() {
@@ -74,6 +83,7 @@ func (p *Player) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 	case *pb.GameMessage_Announcement:
 		p.masterAddr = addr
 		p.announcementMsg = t.Announcement
+		p.node.Config = t.Announcement.Games[0].GetConfig()
 		log.Printf("Received AnnouncementMsg from %v via multicast", addr)
 		p.sendJoinRequest()
 	default:
@@ -97,6 +107,7 @@ func (p *Player) receiveMessages() {
 			continue
 		}
 
+		log.Printf("Player: Received message: %v from %v", msg, addr)
 		p.handleMessage(&msg, addr)
 	}
 }
@@ -114,43 +125,17 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	case *pb.GameMessage_State:
 		p.node.State = t.State.GetState()
 		log.Printf("Received StateMsg with state_order: %d", p.node.State.GetStateOrder())
+		// Обновить интерфейс пользователя (интегрировать с UI)
 	case *pb.GameMessage_Error:
 		log.Printf("Error from server: %s", t.Error.GetErrorMessage())
 	case *pb.GameMessage_RoleChange:
 		p.handleRoleChangeMessage(msg)
 	case *pb.GameMessage_Ping:
 		// Отправляем AckMsg в ответ
-		p.sendAck(msg)
+		p.node.SendAck(msg, addr)
 	default:
 		log.Printf("Received unknown message")
 	}
-}
-
-// Любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
-func (p *Player) sendAck(msg *pb.GameMessage) {
-	//ackMsg := &pb.GameMessage{
-	//	MsgSeq:     proto.Int64(msg.GetMsgSeq()),
-	//	SenderId:   proto.Int32(p.node.PlayerInfo.GetId()),
-	//	ReceiverId: proto.Int32(msg.GetSenderId()),
-	//	Type: &pb.GameMessage_Ack{
-	//		Ack: &pb.GameMessage_AckMsg{},
-	//	},
-	//}
-	//
-	//data, err := proto.Marshal(ackMsg)
-	//if err != nil {
-	//	log.Printf("Error marshalling AckMsg: %v", err)
-	//	return
-	//}
-	//
-	//_, err = p.node.UnicastConn.WriteToUDP(data, p.masterAddr)
-	//if err != nil {
-	//	log.Printf("Error sending AckMsg: %v", err)
-	//	return
-	//}
-	//log.Printf("Sent AckMsg to %v", p.masterAddr)
-
-	p.node.SendAck(msg, p.masterAddr)
 }
 
 func (p *Player) handleRoleChangeMessage(msg *pb.GameMessage) {
@@ -181,13 +166,6 @@ func (p *Player) discoverGames() {
 			Discover: &pb.GameMessage_DiscoverMsg{},
 		},
 	}
-	p.node.MsgSeq++
-
-	data, err := proto.Marshal(discoverMsg)
-	if err != nil {
-		log.Fatalf("Error marshalling discovery message: %v", err)
-		return
-	}
 
 	multicastAddr, err := net.ResolveUDPAddr("udp", p.node.MulticastAddress)
 	if err != nil {
@@ -195,16 +173,16 @@ func (p *Player) discoverGames() {
 		return
 	}
 
-	_, err = p.node.UnicastConn.WriteToUDP(data, multicastAddr)
-	if err != nil {
-		log.Fatalf("Error sending discovery message: %v", err)
-		return
-	}
-
-	log.Printf("Sent DiscoverMsg to %v", multicastAddr)
+	p.node.SendMessage(discoverMsg, multicastAddr)
+	log.Printf("Player: Sent DiscoverMsg to multicast address %v", multicastAddr)
 }
 
 func (p *Player) sendJoinRequest() {
+	if p.announcementMsg == nil || len(p.announcementMsg.Games) == 0 {
+		log.Printf("Player: No available games to join")
+		return
+	}
+
 	joinMsg := &pb.GameMessage{
 		MsgSeq: proto.Int64(p.node.MsgSeq),
 		Type: &pb.GameMessage_Join{
@@ -216,20 +194,9 @@ func (p *Player) sendJoinRequest() {
 			},
 		},
 	}
-	p.node.MsgSeq++
 
-	data, err := proto.Marshal(joinMsg)
-	if err != nil {
-		log.Fatalf("Error marshalling joinMessage: %v", err)
-		return
-	}
-
-	// Отправляем JoinMsg мастеру
-	_, err = p.node.UnicastConn.WriteToUDP(data, p.masterAddr)
-	if err != nil {
-		log.Fatalf("Error sending joinMessage: %v", err)
-		return
-	}
+	p.node.SendMessage(joinMsg, p.masterAddr)
+	log.Printf("Player: Sent JoinMsg to master at %v", p.masterAddr)
 }
 
 func (p *Player) sendSteerMessage() {
@@ -242,19 +209,7 @@ func (p *Player) sendSteerMessage() {
 			},
 		},
 	}
-	p.node.MsgSeq++
-
-	data, err := proto.Marshal(steerMsg)
-	if err != nil {
-		log.Fatalf("Error marshalling steerMessage: %v", err)
-		return
-	}
-
-	_, err = p.node.UnicastConn.WriteToUDP(data, p.masterAddr)
-	if err != nil {
-		log.Fatalf("Error sending steerMessage: %v", err)
-		return
-	}
+	p.node.SendMessage(steerMsg, p.masterAddr)
 }
 
 //func (p *Player) sendPing() {
@@ -291,17 +246,7 @@ func (p *Player) sendRoleChangeRequest(newRole pb.NodeRole) {
 			},
 		},
 	}
-	p.node.MsgSeq++
 
-	data, err := proto.Marshal(roleChangeMsg)
-	if err != nil {
-		log.Printf("Error marshalling RoleChangeMsg: %v", err)
-		return
-	}
-
-	_, err = p.node.UnicastConn.WriteToUDP(data, p.masterAddr)
-	if err != nil {
-		log.Printf("Error sending RoleChangeMsg: %v", err)
-		return
-	}
+	p.node.SendMessage(roleChangeMsg, p.masterAddr)
+	log.Printf("Player: Sent RoleChangeMsg to %v with new role: %v", p.masterAddr, newRole)
 }

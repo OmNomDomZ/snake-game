@@ -35,8 +35,8 @@ type Node struct {
 }
 
 func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPConn,
-	unicastConn *net.UDPConn, playerInfo *pb.GamePlayer) Node {
-	return Node{
+	unicastConn *net.UDPConn, playerInfo *pb.GamePlayer) *Node {
+	return &Node{
 		State:               state,
 		Config:              config,
 		MulticastAddress:    MulticastAddr,
