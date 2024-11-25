@@ -2,10 +2,10 @@ package master
 
 import (
 	pb "SnakeGame/model/proto"
+	"fmt"
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
-	"strconv"
 	"time"
 )
 
@@ -31,25 +31,14 @@ func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UD
 			Ack: &pb.GameMessage_AckMsg{},
 		},
 	}
-	m.node.MsgSeq++
-
-	data, err := proto.Marshal(ackMsg)
-	if err != nil {
-		log.Printf("Error marshalling AckMsg: %v", err)
-		return
-	}
-
-	_, err = m.node.UnicastConn.WriteTo(data, addr)
-	if err != nil {
-		log.Printf("Error sending AckMsg: %v", err)
-		return
-	}
+	m.node.SendMessage(ackMsg, addr)
 
 	m.addSnakeForNewPlayer(newPlayerID)
 
 	m.checkAndAssignDeputy()
 }
 
+// назначение заместителя
 func (m *Master) checkAndAssignDeputy() {
 	if m.hasDeputy() {
 		return
@@ -63,6 +52,7 @@ func (m *Master) checkAndAssignDeputy() {
 	}
 }
 
+// проверка наличия Deputy
 func (m *Master) hasDeputy() bool {
 	for _, player := range m.players.Players {
 		if player.GetRole() == pb.NodeRole_DEPUTY {
@@ -75,8 +65,12 @@ func (m *Master) hasDeputy() bool {
 func (m *Master) addSnakeForNewPlayer(playerID int32) {
 	newSnake := &pb.GameState_Snake{
 		PlayerId: proto.Int32(playerID),
-		Points: []*pb.GameState_Coord{{X: proto.Int32(m.node.Config.GetWidth() / 2),
-			Y: proto.Int32(m.node.Config.GetHeight() / 2)}},
+		Points: []*pb.GameState_Coord{
+			{
+				X: proto.Int32(m.node.Config.GetWidth() / 2),
+				Y: proto.Int32(m.node.Config.GetHeight() / 2),
+			},
+		},
 		State:         pb.GameState_Snake_ALIVE.Enum(),
 		HeadDirection: pb.Direction_RIGHT.Enum(),
 	}
@@ -94,20 +88,8 @@ func (m *Master) handleDiscoverMessage(addr *net.UDPAddr) {
 			},
 		},
 	}
-	m.node.MsgSeq++
 
-	data, err := proto.Marshal(announcementMsg)
-	if err != nil {
-		log.Printf("Error marshalling AnnouncementMsg: %v", err)
-		return
-	}
-
-	_, err = m.node.UnicastConn.WriteToUDP(data, addr)
-	if err != nil {
-		log.Printf("Error sending AnnouncementMsg: %v", err)
-		return
-	}
-	log.Printf("Sent AnnouncementMsg to %v via unicast", addr)
+	m.node.SendMessage(announcementMsg, addr)
 }
 
 func (m *Master) handleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId int32) {
@@ -207,6 +189,7 @@ func (m *Master) findNewDeputy() {
 	}
 }
 
+// назначение нового заместителя
 func (m *Master) assignDeputy(player *pb.GamePlayer) {
 	player.Role = pb.NodeRole_DEPUTY.Enum()
 
@@ -221,26 +204,14 @@ func (m *Master) assignDeputy(player *pb.GamePlayer) {
 			},
 		},
 	}
-	m.node.MsgSeq++
-
-	data, err := proto.Marshal(roleChangeMsg)
+	playerAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort()))
 	if err != nil {
-		log.Printf("Error marshalling RoleChangeMsg: %v", err)
+		log.Printf("Error resolving address for Deputy: %v", err)
 		return
 	}
 
-	playerAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(player.GetIpAddress(), strconv.Itoa(int(player.GetPort()))))
-	if err != nil {
-		log.Printf("Error resolving address: %v", err)
-		return
-	}
-
-	_, err = m.node.UnicastConn.WriteToUDP(data, playerAddr)
-	if err != nil {
-		log.Printf("Error sending RoleChangeMsgto player ID: %d", player.GetId())
-	} else {
-		log.Printf("Player ID: %d is new DEPUTY", player.GetId())
-	}
+	m.node.SendMessage(roleChangeMsg, playerAddr)
+	log.Printf("Player ID: %d is assigned as DEPUTY", player.GetId())
 }
 
 func (m *Master) makeSnakeZombie(playerId int32) {
