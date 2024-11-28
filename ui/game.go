@@ -1,4 +1,4 @@
-package game
+package ui
 
 import (
 	pb "SnakeGame/model/proto"
@@ -18,11 +18,12 @@ const CellSize = 20
 var gameTicker *time.Ticker
 var isRunning bool
 
-func CreateGameContent(state *pb.GameState, config *pb.GameConfig) *fyne.Container {
+// func CreateGameContent(state *pb.GameState, config *pb.GameConfig) *fyne.Container {
+func CreateGameContent(field *field) *fyne.Container {
 	gameContent := fyne.NewContainerWithoutLayout()
 
-	windowWidth := float32(config.GetWidth()) * CellSize
-	windowHeight := float32(config.GetHeight()) * CellSize
+	windowWidth := float32(field.width) * CellSize
+	windowHeight := float32(field.height) * CellSize
 	gameContent.Resize(fyne.NewSize(windowWidth, windowHeight))
 
 	return gameContent
