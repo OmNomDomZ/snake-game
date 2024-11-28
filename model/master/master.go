@@ -16,10 +16,7 @@ type Master struct {
 
 	announcement *pb.GameAnnouncement
 	players      *pb.GamePlayers
-	// время последнего сообщения от игрока [playerId]time
-	lastInteraction map[int32]time.Time
-	// для отслеживания отправок сообщений
-	lastSent map[string]time.Time
+	lastStateMsg int64
 }
 
 func NewMaster(multicastConn *net.UDPConn) *Master {
@@ -73,11 +70,38 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 	node := common.NewNode(state, config, multicastConn, unicastConn, masterPlayer)
 
 	return &Master{
-		node:            node,
-		announcement:    announcement,
-		players:         players,
-		lastInteraction: map[int32]time.Time{},
-		lastSent:        make(map[string]time.Time),
+		node:         node,
+		announcement: announcement,
+		players:      players,
+		lastStateMsg: 0,
+	}
+}
+
+func NewDeputyMaster(node *common.Node, newMaster *pb.GamePlayer, lastStateMsg int64) *Master {
+	newMaster.Role = pb.NodeRole_MASTER.Enum()
+
+	config := node.Config
+
+	unicastConn := node.UnicastConn
+
+	state := node.State
+
+	announcement := &pb.GameAnnouncement{
+		Players:  state.Players,
+		Config:   config,
+		CanJoin:  proto.Bool(true),
+		GameName: proto.String("Game"),
+	}
+
+	multicastConn := node.MulticastConn
+
+	newNode := common.NewNode(state, config, multicastConn, unicastConn, newMaster)
+
+	return &Master{
+		node:         newNode,
+		announcement: announcement,
+		players:      state.Players,
+		lastStateMsg: lastStateMsg,
 	}
 }
 
@@ -88,7 +112,7 @@ func (m *Master) Start() {
 	go m.checkTimeouts()
 	go m.sendStateMessage()
 	go m.node.ResendUnconfirmedMessages(m.node.Config.GetStateDelayMs())
-	go m.node.SendPings(m.node.Config.GetStateDelayMs(), m.lastSent)
+	go m.node.SendPings(m.node.Config.GetStateDelayMs())
 }
 
 // отправка AnnouncementMsg
@@ -178,6 +202,7 @@ func (m *Master) receiveMessages() {
 
 // обработка юникаст сообщения
 func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
+	m.node.LastInteraction[msg.GetSenderId()] = time.Now()
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Join:
 		// проверяем есть ли место 5*5 для новой змеи
@@ -192,6 +217,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 				},
 			}
 			m.node.SendMessage(errorMsg, addr)
+			m.node.SendAck(msg, addr)
 		} else {
 			// обрабатываем joinMsg
 			joinMsg := t.Join
@@ -199,12 +225,9 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		}
 
 		m.node.SendAck(msg, addr)
-		m.lastInteraction[msg.GetSenderId()] = time.Now()
 
 	case *pb.GameMessage_Discover:
 		m.handleDiscoverMessage(addr)
-		m.node.SendAck(msg, addr)
-		m.lastInteraction[msg.GetSenderId()] = time.Now()
 
 	case *pb.GameMessage_Steer:
 		playerId := msg.GetSenderId()
@@ -214,7 +237,6 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		if playerId != 0 {
 			m.handleSteerMessage(t.Steer, playerId)
 			m.node.SendAck(msg, addr)
-			m.lastInteraction[playerId] = time.Now()
 		} else {
 			log.Printf("SteerMsg received from unknown address: %v", addr)
 		}
@@ -222,14 +244,21 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	case *pb.GameMessage_RoleChange:
 		m.handleRoleChangeMessage(msg, addr)
 		m.node.SendAck(msg, addr)
-		m.lastInteraction[msg.GetSenderId()] = time.Now()
 
 	case *pb.GameMessage_Ping:
 		m.node.SendAck(msg, addr)
-		m.lastInteraction[msg.GetSenderId()] = time.Now()
 
 	case *pb.GameMessage_Ack:
 		m.node.AckChan <- msg.GetMsgSeq()
+
+	case *pb.GameMessage_State:
+		if msg.GetMsgSeq() <= m.lastStateMsg {
+			return
+		} else {
+			m.lastStateMsg = msg.GetMsgSeq()
+		}
+		// рисуем
+		m.node.SendAck(msg, addr)
 
 	default:
 		log.Printf("Received unknown message type from %v", addr)
@@ -269,9 +298,6 @@ func (m *Master) sendStateMessage() {
 func (m *Master) getAllPlayersUDPAddrs() []*net.UDPAddr {
 	var addrs []*net.UDPAddr
 	for _, player := range m.players.Players {
-		if player.GetRole() == pb.NodeRole_MASTER {
-			continue
-		}
 		addrStr := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
 		addr, err := net.ResolveUDPAddr("udp", addrStr)
 		if err != nil {

@@ -1,28 +1,18 @@
 package main
 
 import (
-	"SnakeGame/connection"
-	"SnakeGame/model/master"
-	"SnakeGame/model/player"
-	"time"
+	"SnakeGame/ui"
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
 )
 
 func main() {
-	// TODO: добавить mapper для proto messages
-	multicastConn := connection.Connection()
-	defer multicastConn.Close()
+	myApp := app.New()
+	myWindow := myApp.NewWindow("SnakeGame")
+	myWindow.Resize(fyne.NewSize(1000, 800))
+	myWindow.CenterOnScreen()
 
-	// Запускаем мастера
-	master := master.NewMaster(multicastConn)
-	master.Start()
+	ui.ShowMainMenu(myWindow)
 
-	// Задержка, чтобы мастер успел запуститься
-	time.Sleep(1 * time.Second)
-
-	// Запускаем игрока
-	player := player.NewPlayer(multicastConn)
-	player.Start()
-
-	// Даем им пообщаться
-	time.Sleep(30 * time.Second)
+	myWindow.ShowAndRun()
 }

@@ -14,10 +14,7 @@ type Player struct {
 
 	announcementMsg *pb.GameMessage_AnnouncementMsg
 	masterAddr      *net.UDPAddr
-	// время последнего сообщения от игрока [playerId]time
-	lastInteraction map[int32]time.Time
-	// для отслеживания отправок сообщений
-	lastSent map[string]time.Time
+	lastStateMsg    int64
 }
 
 func NewPlayer(multicastConn *net.UDPConn) *Player {
@@ -45,8 +42,7 @@ func NewPlayer(multicastConn *net.UDPConn) *Player {
 		node:            node,
 		announcementMsg: nil,
 		masterAddr:      nil,
-		lastInteraction: make(map[int32]time.Time),
-		lastSent:        make(map[string]time.Time),
+		lastStateMsg:    0,
 	}
 }
 
@@ -55,7 +51,7 @@ func (p *Player) Start() {
 	go p.receiveMulticastMessages()
 	go p.receiveMessages()
 	go p.node.ResendUnconfirmedMessages(p.node.Config.GetStateDelayMs())
-	go p.node.SendPings(p.node.Config.GetStateDelayMs(), p.lastSent)
+	go p.node.SendPings(p.node.Config.GetStateDelayMs())
 }
 
 func (p *Player) receiveMulticastMessages() {
@@ -113,11 +109,11 @@ func (p *Player) receiveMessages() {
 }
 
 func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
+	p.node.LastInteraction[msg.GetSenderId()] = time.Now()
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Ack:
 		p.node.PlayerInfo.Id = proto.Int32(msg.GetReceiverId())
 		p.node.AckChan <- msg.GetMsgSeq()
-		p.lastInteraction[msg.GetSenderId()] = time.Now()
 		log.Printf("Joined game with ID: %d", p.node.PlayerInfo.GetId())
 	case *pb.GameMessage_Announcement:
 		p.masterAddr = addr
@@ -125,10 +121,14 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		log.Printf("Received AnnouncementMsg from %v via unicast", addr)
 		p.sendJoinRequest()
 	case *pb.GameMessage_State:
+		if msg.GetMsgSeq() <= p.lastStateMsg {
+			return
+		} else {
+			p.lastStateMsg = msg.GetMsgSeq()
+		}
 		p.node.State = t.State.GetState()
 		p.node.SendAck(msg, addr)
 		log.Printf("Received StateMsg with state_order: %d", p.node.State.GetStateOrder())
-		p.lastInteraction[msg.GetSenderId()] = time.Now()
 		// Обновить интерфейс пользователя (интегрировать с UI)
 	case *pb.GameMessage_Error:
 		p.node.SendAck(msg, addr)
@@ -136,34 +136,11 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	case *pb.GameMessage_RoleChange:
 		p.handleRoleChangeMessage(msg)
 		p.node.SendAck(msg, addr)
-		p.lastInteraction[msg.GetSenderId()] = time.Now()
 	case *pb.GameMessage_Ping:
 		// Отправляем AckMsg в ответ
 		p.node.SendAck(msg, addr)
-		p.lastInteraction[msg.GetSenderId()] = time.Now()
 	default:
 		log.Printf("Received unknown message")
-	}
-}
-
-func (p *Player) handleRoleChangeMessage(msg *pb.GameMessage) {
-	roleChangeMsg := msg.GetRoleChange()
-	switch {
-	case roleChangeMsg.GetReceiverRole() == pb.NodeRole_DEPUTY:
-		// DEPUTY
-		p.node.PlayerInfo.Role = pb.NodeRole_DEPUTY.Enum()
-		log.Printf("Assigned as DEPUTY")
-	case roleChangeMsg.GetReceiverRole() == pb.NodeRole_MASTER:
-		// MASTER
-		p.node.PlayerInfo.Role = pb.NodeRole_MASTER.Enum()
-		log.Printf("Assigned as MASTER")
-		// TODO: Implement logic to take over as MASTER
-	case roleChangeMsg.GetReceiverRole() == pb.NodeRole_VIEWER:
-		// VIEWER
-		p.node.PlayerInfo.Role = pb.NodeRole_VIEWER.Enum()
-		log.Printf("Assigned as VIEWER")
-	default:
-		log.Printf("Received unknown RoleChangeMsg")
 	}
 }
 
@@ -220,41 +197,63 @@ func (p *Player) sendSteerMessage() {
 	p.node.SendMessage(steerMsg, p.masterAddr)
 }
 
-//func (p *Player) sendPing() {
-//	pingMsg := &pb.GameMessage{
-//		MsgSeq:   proto.Int64(p.node.MsgSeq),
-//		SenderId: proto.Int32(p.node.PlayerInfo.GetId()),
-//		Type: &pb.GameMessage_Ping{
-//			Ping: &pb.GameMessage_PingMsg{},
-//		},
-//	}
-//	p.node.MsgSeq++
+// обработка отвалившихся узлов
+//func (p *Player) checkTimeouts() {
+//	ticker := time.NewTicker(time.Duration(0.8*float64(p.node.Config.GetStateDelayMs())) * time.Millisecond)
+//	defer ticker.Stop()
 //
-//	data, err := proto.Marshal(pingMsg)
-//	if err != nil {
-//		log.Printf("Error marshalling PingMsg: %v", err)
-//		return
-//	}
+//	for range ticker.C {
+//		now := time.Now()
+//		p.node.Mu.Lock()
+//		for _, lastInteraction := range p.node.LastInteraction {
+//			// TODO: добавить проверку на то что мастер отвалился
+//			if now.Sub(lastInteraction) > time.Duration(0.8*float64(p.node.Config.GetStateDelayMs()))*time.Millisecond {
+//				switch p.node.PlayerInfo.GetRole() {
+//				// игрок заметил, что мастер отвалился и переходит к Deputy
+//				case pb.NodeRole_NORMAL:
+//					deputy := p.getDeputy()
+//					if deputy != nil {
+//						addrStr := fmt.Sprintf("%s:%d", deputy.GetIpAddress(), deputy.GetPort())
+//						addr, err := net.ResolveUDPAddr("udp", addrStr)
+//						if err != nil {
+//							log.Printf("Error resolving deputy address: %v", err)
+//							p.node.Mu.Unlock()
+//							continue
+//						}
+//						p.masterAddr = addr
+//						log.Printf("Switched to DEPUTY as new MASTER at %v", p.masterAddr)
+//					} else {
+//						log.Printf("No DEPUTY available to switch to")
+//					}
 //
-//	_, err = p.node.UnicastConn.WriteToUDP(data, p.masterAddr)
-//	if err != nil {
-//		log.Printf("Error sending PingMsg: %v", err)
-//		return
+//				// Deputy заметил, что отвалился мастер и заменяет его
+//				case pb.NodeRole_DEPUTY:
+//					p.becomeMaster()
+//				}
+//			}
+//		}
+//		p.node.Mu.Unlock()
 //	}
 //}
-
-func (p *Player) sendRoleChangeRequest(newRole pb.NodeRole) {
-	roleChangeMsg := &pb.GameMessage{
-		MsgSeq:   proto.Int64(p.node.MsgSeq),
-		SenderId: proto.Int32(p.node.PlayerInfo.GetId()),
-		Type: &pb.GameMessage_RoleChange{
-			RoleChange: &pb.GameMessage_RoleChangeMsg{
-				SenderRole:   p.node.PlayerInfo.GetRole().Enum(),
-				ReceiverRole: newRole.Enum(),
-			},
-		},
-	}
-
-	p.node.SendMessage(roleChangeMsg, p.masterAddr)
-	log.Printf("Player: Sent RoleChangeMsg to %v with new role: %v", p.masterAddr, newRole)
-}
+//
+//func (p *Player) getDeputy() *pb.GamePlayer {
+//	for _, player := range p.node.State.Players.Players {
+//		if player.GetRole() == pb.NodeRole_DEPUTY {
+//			return player
+//		}
+//	}
+//	return nil
+//}
+//
+//func (p *Player) becomeMaster() {
+//	log.Printf("DEPUTY becoming new MASTER")
+//	// Обновляем роль игрока
+//	p.node.PlayerInfo.Role = pb.NodeRole_MASTER.Enum()
+//
+//	// Создаем новый мастер
+//	masterNode := master.NewDeputyMaster(p.node, p.node.PlayerInfo, p.lastStateMsg)
+//	// Запускаем мастер
+//	go masterNode.Start()
+//	// Останавливаем функции игрока
+//	p.stopPlayerFunctions()
+//}

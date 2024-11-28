@@ -28,6 +28,12 @@ type Node struct {
 	UnicastConn      *net.UDPConn
 	PlayerInfo       *pb.GamePlayer
 	MsgSeq           int64
+	Role             pb.NodeRole
+
+	// время последнего сообщения от игрока [playerId]time
+	LastInteraction map[int32]time.Time
+	// время отправки последнего сообщения игроку отправок сообщений
+	LastSent map[string]time.Time
 
 	unconfirmedMessages map[int64]*MessageEntry
 	Mu                  sync.Mutex
@@ -37,13 +43,17 @@ type Node struct {
 func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPConn,
 	unicastConn *net.UDPConn, playerInfo *pb.GamePlayer) *Node {
 	return &Node{
-		State:               state,
-		Config:              config,
-		MulticastAddress:    MulticastAddr,
-		MulticastConn:       multicastConn,
-		UnicastConn:         unicastConn,
-		PlayerInfo:          playerInfo,
-		MsgSeq:              1,
+		State:            state,
+		Config:           config,
+		MulticastAddress: MulticastAddr,
+		MulticastConn:    multicastConn,
+		UnicastConn:      unicastConn,
+		PlayerInfo:       playerInfo,
+		MsgSeq:           1,
+
+		LastInteraction: make(map[int32]time.Time),
+		LastSent:        make(map[string]time.Time),
+
 		unconfirmedMessages: make(map[int64]*MessageEntry),
 		AckChan:             make(chan int64),
 	}
@@ -65,17 +75,7 @@ func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
 		},
 	}
 
-	data, err := proto.Marshal(ackMsg)
-	if err != nil {
-		log.Printf("Error marshalling AckMsg: %v", err)
-		return
-	}
-
-	_, err = n.UnicastConn.WriteToUDP(data, addr)
-	if err != nil {
-		log.Printf("Error sending AckMsg: %v", err)
-		return
-	}
+	n.SendMessage(ackMsg, addr)
 	log.Printf("Sent AckMsg to %v", addr)
 }
 
@@ -125,6 +125,11 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		}
 		n.Mu.Unlock()
 	}
+
+	ip := addr.IP
+	port := addr.Port
+	address := fmt.Sprintf("%s:%d", ip, port)
+	n.LastSent[address] = time.Now()
 
 	log.Printf("Sent message with Seq: %d to %v", msg.GetMsgSeq(), addr)
 }
@@ -177,7 +182,7 @@ func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
 }
 
 // SendPings отправка PingMsg, если не было отправлено сообщений в течение stateDelayMs/10
-func (n *Node) SendPings(stateDelayMs int32, lastSent map[string]time.Time) {
+func (n *Node) SendPings(stateDelayMs int32) {
 	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
 	defer ticker.Stop()
 
@@ -189,7 +194,7 @@ func (n *Node) SendPings(stateDelayMs int32, lastSent map[string]time.Time) {
 				continue
 			}
 			addrKey := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
-			last, exists := lastSent[addrKey]
+			last, exists := n.LastSent[addrKey]
 			if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
 				playerAddr, err := net.ResolveUDPAddr("udp", addrKey)
 				if err != nil {
@@ -197,7 +202,7 @@ func (n *Node) SendPings(stateDelayMs int32, lastSent map[string]time.Time) {
 					continue
 				}
 				n.SendPing(playerAddr)
-				lastSent[addrKey] = now
+				n.LastSent[addrKey] = now
 			}
 		}
 		n.Mu.Unlock()

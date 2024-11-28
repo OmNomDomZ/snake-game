@@ -140,7 +140,7 @@ func (m *Master) checkTimeouts() {
 	for range ticker.C {
 		now := time.Now()
 		m.node.Mu.Lock()
-		for playerId, lastInteraction := range m.lastInteraction {
+		for playerId, lastInteraction := range m.node.LastInteraction {
 			if now.Sub(lastInteraction) > time.Duration(0.8*float64(m.node.Config.GetStateDelayMs()))*time.Millisecond {
 				log.Printf("player ID: %d has timeout", playerId)
 				m.removePlayer(playerId)
@@ -154,7 +154,7 @@ func (m *Master) removePlayer(playerId int32) {
 	m.node.Mu.Lock()
 	defer m.node.Mu.Unlock()
 
-	delete(m.lastInteraction, playerId)
+	delete(m.node.LastInteraction, playerId)
 
 	var removedPlayer *pb.GamePlayer
 	var index int
@@ -174,6 +174,7 @@ func (m *Master) removePlayer(playerId int32) {
 	if removedPlayer.GetRole() != pb.NodeRole_VIEWER {
 		// Удаляем только если игрок не VIEWER
 		m.players.Players = append(m.players.Players[:index], m.players.Players[index+1:]...)
+		delete(m.node.LastSent, fmt.Sprintf("%s:%d", removedPlayer.GetIpAddress(), removedPlayer.GetPort()))
 	}
 
 	// Если игрок был DEPUTY, назначаем нового
@@ -239,6 +240,7 @@ func (m *Master) handleRoleChangeMessage(msg *pb.GameMessage, addr *net.UDPAddr)
 
 	switch {
 	case roleChangeMsg.GetSenderRole() == pb.NodeRole_DEPUTY && roleChangeMsg.GetReceiverRole() == pb.NodeRole_MASTER:
+		// TODO: доделать
 		// DEPUTY -> MASTER
 		log.Printf("Deputy has taken over as MASTER. Stopping PlayerInfo.")
 		m.stopMaster()
@@ -248,6 +250,13 @@ func (m *Master) handleRoleChangeMessage(msg *pb.GameMessage, addr *net.UDPAddr)
 		playerId := msg.GetSenderId()
 		log.Printf("Player ID: %d is now a VIEWER. Converting snake to ZOMBIE.", playerId)
 		m.makeSnakeZombie(playerId)
+
+		for _, player := range m.players.Players {
+			if player.GetId() == playerId {
+				player.Role = pb.NodeRole_VIEWER.Enum()
+				break
+			}
+		}
 	default:
 		log.Printf("Received unknown RoleChangeMsg from player ID: %d", msg.GetSenderId())
 	}
