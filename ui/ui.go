@@ -1,19 +1,23 @@
 package ui
 
 import (
-	"SnakeGame/game"
-	"SnakeGame/model"
-	pb "SnakeGame/model/proto"
 	"fmt"
-	"strconv"
-
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
-	"google.golang.org/protobuf/proto"
+	"image/color"
+	"strconv"
 )
 
-// главное меню
+type field struct {
+	width  int
+	height int
+	food   int
+	delay  int
+}
+
 func ShowMainMenu(w fyne.Window) {
 	title := widget.NewLabel("Добро пожаловать в Snake Game!")
 	title.Alignment = fyne.TextAlignCenter
@@ -35,7 +39,6 @@ func ShowMainMenu(w fyne.Window) {
 	w.SetContent(container.NewCenter(content))
 }
 
-// настройка новой игры
 func ShowGameConfig(w fyne.Window) {
 	widthEntry := widget.NewEntry()
 	widthEntry.SetText("25")
@@ -52,13 +55,14 @@ func ShowGameConfig(w fyne.Window) {
 		food, _ := strconv.Atoi(foodEntry.Text)
 		delay, _ := strconv.Atoi(delayEntry.Text)
 
-		state, config := model.InitializeGame()
-		config.Width = proto.Int32(int32(width))
-		config.Height = proto.Int32(int32(height))
-		config.FoodStatic = proto.Int32(int32(food))
-		config.StateDelayMs = proto.Int32(int32(delay))
+		field := field{
+			width:  width,
+			height: height,
+			food:   food,
+			delay:  delay,
+		}
 
-		ShowGameScreen(w, state, config)
+		ShowGameScreen(w, &field)
 	})
 
 	backButton := widget.NewButton("Назад", func() {
@@ -72,7 +76,6 @@ func ShowGameConfig(w fyne.Window) {
 			{Text: "Количество еды", Widget: foodEntry},
 			{Text: "Задержка (мс)", Widget: delayEntry},
 		},
-		OnSubmit: func() {},
 	}
 
 	content := container.NewVBox(
@@ -85,61 +88,66 @@ func ShowGameConfig(w fyne.Window) {
 	w.SetContent(container.NewCenter(content))
 }
 
-// экран игры
-func ShowGameScreen(w fyne.Window, state *pb.GameState, config *pb.GameConfig) {
-	gameContent := game.CreateGameContent(state, config)
+func ShowGameScreen(w fyne.Window, field *field) {
+	// игровое поле
+	gameCanvas := canvas.NewRectangle(color.RGBA{R: 0, G: 255, B: 0, A: 255})
+	gameCanvas.SetMinSize(fyne.NewSize(400, 400)) // Устанавливаем минимальный размер
 
-	infoPanel := createInfoPanel(state, config, func() {
-		game.StopGameLoop()
+	// панель с информацией
+	infoPanel := createInfoPanel(field, func() {
 		ShowMainMenu(w)
 	})
 
-	content := container.NewWithoutLayout(gameContent, infoPanel)
-	updateGameContentSize(w, config, content, infoPanel)
+	// Разделение на две части
+	splitContent := container.NewHSplit(
+		gameCanvas,
+		infoPanel,
+	)
+	// Размеры разделения: 70% слева, 30% справа
+	splitContent.SetOffset(0.7)
 
-	game.StartGameLoop(w, state, config, gameContent, func(score int32) {
-		updateScore(infoPanel, score)
-		updateInfoPanel(infoPanel, state, config)
-	})
-
-	w.SetContent(content)
-	w.Resize(content.Size())
+	w.SetContent(splitContent)
 }
 
-func updateGameContentSize(w fyne.Window, config *pb.GameConfig, content *fyne.Container, infoPanel *fyne.Container) {
-	width := float32(config.GetWidth()) * game.CellSize
-	height := float32(config.GetHeight()) * game.CellSize
+func createInfoPanel(field *field, onExit func()) *fyne.Container {
+	data := [][]string{
+		{"Name", "Score"},
+		{"player1", "25"},
+		{"player2", "30"},
+	}
 
-	gameSize := fyne.NewSize(width+100, height)
-	content.Resize(gameSize)
-	infoPanel.Resize(fyne.NewSize(100, height))
-	infoPanel.Move(fyne.NewPos(width, 0))
-	w.Resize(gameSize)
-}
-
-func createInfoPanel(state *pb.GameState, config *pb.GameConfig, onExit func()) *fyne.Container {
-	scoreLabel := widget.NewLabel(fmt.Sprintf("Счет: %d", state.GetPlayers().GetPlayers()[0].GetScore()))
-	gameInfo := widget.NewLabel(fmt.Sprintf("Игра: Размер: %dx%d, Еда: %d", config.GetWidth(), config.GetHeight(), len(state.Foods)))
-
-	exitButton := widget.NewButton("Выйти", onExit)
-	newGameButton := widget.NewButton("Новая игра", onExit)
-
-	content := container.NewVBox(
-		gameInfo,
-		scoreLabel,
-		exitButton,
-		newGameButton,
+	scoreTable := widget.NewTable(
+		func() (int, int) {
+			return len(data), len(data[0])
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("")
+		},
+		func(id widget.TableCellID, cell fyne.CanvasObject) {
+			cell.(*widget.Label).SetText(data[id.Row][id.Col])
+		},
 	)
 
+	scoreTable.SetColumnWidth(0, 200)
+	scoreTable.SetColumnWidth(1, 100)
+
+	scrollableTable := container.NewScroll(scoreTable)
+	scrollableTable.SetMinSize(fyne.NewSize(300, 150))
+
+	gameInfo := widget.NewLabel(fmt.Sprintf("Текущая игра:\n\nВедущий: Валера\nНазвание: %s\nРазмер: %dx%d\nЕда: %d", "Game", field.width, field.height, field.food))
+	newGameButton := widget.NewButton("Новая игра", onExit)
+
+	exitButton := widget.NewButton("Выйти", onExit)
+
+	content := container.NewVBox(
+		container.New(layout.NewPaddedLayout(), scrollableTable),
+		container.New(layout.NewPaddedLayout(), gameInfo),
+		container.New(layout.NewPaddedLayout(), newGameButton),
+		container.New(layout.NewPaddedLayout(), exitButton),
+	)
 	return content
 }
 
-func updateScore(infoPanel *fyne.Container, score int32) {
-	scoreLabel := infoPanel.Objects[1].(*widget.Label)
-	scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
-}
+func updateInfoPanel(window *fyne.Window, field *field) {
 
-func updateInfoPanel(infoPanel *fyne.Container, state *pb.GameState, config *pb.GameConfig) {
-	gameInfo := infoPanel.Objects[0].(*widget.Label)
-	gameInfo.SetText(fmt.Sprintf("Игра: Размер: %dx%d, Еда: %d", config.GetWidth(), config.GetHeight(), len(state.Foods)))
 }
