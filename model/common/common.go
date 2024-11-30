@@ -66,6 +66,11 @@ func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
 		return
 	}
 
+	if msg.GetSenderId() == msg.GetReceiverId() {
+		fmt.Printf("msg.GetSenderId() == msg.GetReceiverId()\n")
+		return
+	}
+
 	ackMsg := &pb.GameMessage{
 		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
 		SenderId:   proto.Int32(n.PlayerInfo.GetId()),
@@ -129,9 +134,13 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	ip := addr.IP
 	port := addr.Port
 	address := fmt.Sprintf("%s:%d", ip, port)
-	n.LastSent[address] = time.Now()
-
+	//n.LastSent[address] = time.Now()
 	log.Printf("Sent message with Seq: %d to %v", msg.GetMsgSeq(), addr)
+
+	if n.PlayerInfo.GetIpAddress() == addr.IP.String() &&
+		n.PlayerInfo.GetPort() == int32(addr.Port) {
+		n.LastSent[address] = time.Now()
+	}
 }
 
 // HandleAck обработка полученных AckMsg

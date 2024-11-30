@@ -10,34 +10,27 @@ import (
 	"time"
 )
 
-// TODO: добавить генерацию еды
 type Master struct {
-	node *common.Node
+	Node *common.Node
 
 	announcement *pb.GameAnnouncement
 	players      *pb.GamePlayers
 	lastStateMsg int64
 }
 
-func NewMaster(multicastConn *net.UDPConn) *Master {
-	config := &pb.GameConfig{
-		Width:        proto.Int32(25),
-		Height:       proto.Int32(25),
-		FoodStatic:   proto.Int32(3),
-		StateDelayMs: proto.Int32(200),
-	}
-
-	localAddr, err := net.ResolveUDPAddr("udp", ":0")
+func NewMaster(multicastConn *net.UDPConn, config *pb.GameConfig) *Master {
+	localAddr, err := net.ResolveUDPAddr("udp4", ":0")
 	if err != nil {
 		log.Fatalf("Error resolving local UDP address: %v", err)
 	}
-	unicastConn, err := net.ListenUDP("udp", localAddr)
+	unicastConn, err := net.ListenUDP("udp4", localAddr)
 	if err != nil {
 		log.Fatalf("Error creating unicast socket: %v", err)
 	}
 
 	masterIP := unicastConn.LocalAddr().(*net.UDPAddr).IP.String()
-	masterPort := int32(unicastConn.LocalAddr().(*net.UDPAddr).Port)
+	masterPort := unicastConn.LocalAddr().(*net.UDPAddr).Port
+	fmt.Printf("Выделенный локальный адрес: %s:%v\n", masterIP, masterPort)
 
 	masterPlayer := &pb.GamePlayer{
 		Name:      proto.String("Master"),
@@ -46,7 +39,7 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 		Type:      pb.PlayerType_HUMAN.Enum(),
 		Score:     proto.Int32(0),
 		IpAddress: proto.String(masterIP),
-		Port:      proto.Int32(masterPort),
+		Port:      proto.Int32(int32(masterPort)),
 	}
 
 	players := &pb.GamePlayers{
@@ -60,6 +53,20 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 		Players:    players,
 	}
 
+	masterSnake := &pb.GameState_Snake{
+		PlayerId: proto.Int32(masterPlayer.GetId()),
+		Points: []*pb.GameState_Coord{
+			{
+				X: proto.Int32(config.GetWidth() / 2),
+				Y: proto.Int32(config.GetHeight() / 2),
+			},
+		},
+		State:         pb.GameState_Snake_ALIVE.Enum(),
+		HeadDirection: pb.Direction_RIGHT.Enum(),
+	}
+
+	state.Snakes = append(state.Snakes, masterSnake)
+
 	announcement := &pb.GameAnnouncement{
 		Players:  players,
 		Config:   config,
@@ -70,7 +77,7 @@ func NewMaster(multicastConn *net.UDPConn) *Master {
 	node := common.NewNode(state, config, multicastConn, unicastConn, masterPlayer)
 
 	return &Master{
-		node:         node,
+		Node:         node,
 		announcement: announcement,
 		players:      players,
 		lastStateMsg: 0,
@@ -98,7 +105,7 @@ func NewDeputyMaster(node *common.Node, newMaster *pb.GamePlayer, lastStateMsg i
 	newNode := common.NewNode(state, config, multicastConn, unicastConn, newMaster)
 
 	return &Master{
-		node:         newNode,
+		Node:         newNode,
 		announcement: announcement,
 		players:      state.Players,
 		lastStateMsg: lastStateMsg,
@@ -111,8 +118,8 @@ func (m *Master) Start() {
 	go m.receiveMulticastMessages()
 	go m.checkTimeouts()
 	go m.sendStateMessage()
-	go m.node.ResendUnconfirmedMessages(m.node.Config.GetStateDelayMs())
-	go m.node.SendPings(m.node.Config.GetStateDelayMs())
+	go m.Node.ResendUnconfirmedMessages(m.Node.Config.GetStateDelayMs())
+	go m.Node.SendPings(m.Node.Config.GetStateDelayMs())
 }
 
 // отправка AnnouncementMsg
@@ -129,11 +136,11 @@ func (m *Master) sendAnnouncementMessage() {
 				},
 			},
 		}
-		multicastAddr, err := net.ResolveUDPAddr("udp", m.node.MulticastAddress)
+		multicastAddr, err := net.ResolveUDPAddr("udp", m.Node.MulticastAddress)
 		if err != nil {
 			log.Fatalf("Error resolving multicast address: %v", err)
 		}
-		m.node.SendMessage(announcementMsg, multicastAddr)
+		m.Node.SendMessage(announcementMsg, multicastAddr)
 	}
 }
 
@@ -141,7 +148,7 @@ func (m *Master) sendAnnouncementMessage() {
 func (m *Master) receiveMulticastMessages() {
 	for {
 		buf := make([]byte, 4096)
-		n, addr, err := m.node.MulticastConn.ReadFromUDP(buf)
+		n, addr, err := m.Node.MulticastConn.ReadFromUDP(buf)
 		if err != nil {
 			log.Printf("Error receiving multicast message: %v", err)
 			continue
@@ -164,14 +171,14 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 	case *pb.GameMessage_Discover:
 		// пришел DiscoverMsg отправляем AnnouncementMsg
 		announcementMsg := &pb.GameMessage{
-			MsgSeq: proto.Int64(m.node.MsgSeq),
+			MsgSeq: proto.Int64(m.Node.MsgSeq),
 			Type: &pb.GameMessage_Announcement{
 				Announcement: &pb.GameMessage_AnnouncementMsg{
 					Games: []*pb.GameAnnouncement{m.announcement},
 				},
 			},
 		}
-		m.node.SendMessage(announcementMsg, addr)
+		m.Node.SendMessage(announcementMsg, addr)
 	default:
 		log.Printf("PlayerInfo: Receive unknown multicast message from %v, type %v", addr, t)
 	}
@@ -181,7 +188,7 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 func (m *Master) receiveMessages() {
 	for {
 		buf := make([]byte, 4096)
-		n, addr, err := m.node.UnicastConn.ReadFromUDP(buf)
+		n, addr, err := m.Node.UnicastConn.ReadFromUDP(buf)
 		if err != nil {
 			log.Printf("Error receiving message: %v", err)
 			continue
@@ -202,7 +209,7 @@ func (m *Master) receiveMessages() {
 
 // обработка юникаст сообщения
 func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
-	m.node.LastInteraction[msg.GetSenderId()] = time.Now()
+	m.Node.LastInteraction[msg.GetSenderId()] = time.Now()
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Join:
 		// проверяем есть ли место 5*5 для новой змеи
@@ -216,49 +223,56 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 					},
 				},
 			}
-			m.node.SendMessage(errorMsg, addr)
-			m.node.SendAck(msg, addr)
+			m.Node.SendMessage(errorMsg, addr)
+			m.Node.SendAck(msg, addr)
 		} else {
 			// обрабатываем joinMsg
+			fmt.Printf("Join msg\n")
 			joinMsg := t.Join
 			m.handleJoinMessage(joinMsg, addr)
 		}
 
-		m.node.SendAck(msg, addr)
+		m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Discover:
 		m.handleDiscoverMessage(addr)
+		fmt.Printf("Discover msg\n")
 
 	case *pb.GameMessage_Steer:
 		playerId := msg.GetSenderId()
+		fmt.Printf("Steer msg\n")
 		if playerId == 0 {
 			playerId = m.getPlayerIdByAddress(addr)
 		}
 		if playerId != 0 {
 			m.handleSteerMessage(t.Steer, playerId)
-			m.node.SendAck(msg, addr)
+			m.Node.SendAck(msg, addr)
 		} else {
 			log.Printf("SteerMsg received from unknown address: %v", addr)
 		}
 
 	case *pb.GameMessage_RoleChange:
+		fmt.Printf("Role change msg\n")
 		m.handleRoleChangeMessage(msg, addr)
-		m.node.SendAck(msg, addr)
+		m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ping:
-		m.node.SendAck(msg, addr)
+		fmt.Printf("Ping msg\n")
+		m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ack:
-		m.node.AckChan <- msg.GetMsgSeq()
+		fmt.Printf("Ack msg\n")
+		m.Node.AckChan <- msg.GetMsgSeq()
 
 	case *pb.GameMessage_State:
+		fmt.Printf("State msg\n")
 		if msg.GetMsgSeq() <= m.lastStateMsg {
 			return
 		} else {
 			m.lastStateMsg = msg.GetMsgSeq()
 		}
 		// рисуем
-		m.node.SendAck(msg, addr)
+		m.Node.SendAck(msg, addr)
 
 	default:
 		log.Printf("Received unknown message type from %v", addr)
@@ -275,18 +289,18 @@ func (m *Master) getPlayerIdByAddress(addr *net.UDPAddr) int32 {
 }
 
 func (m *Master) sendStateMessage() {
-	ticker := time.NewTicker(time.Duration(m.node.Config.GetStateDelayMs()) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(m.Node.Config.GetStateDelayMs()) * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		m.generateFood()
-		m.updateGameState()
+		m.GenerateFood()
+		m.UpdateGameState()
 
 		stateMsg := &pb.GameMessage{
-			MsgSeq: proto.Int64(m.node.MsgSeq),
+			MsgSeq: proto.Int64(m.Node.MsgSeq),
 			Type: &pb.GameMessage_State{
 				State: &pb.GameMessage_StateMsg{
-					State: m.node.State,
+					State: m.Node.State,
 				},
 			},
 		}
@@ -299,6 +313,7 @@ func (m *Master) getAllPlayersUDPAddrs() []*net.UDPAddr {
 	var addrs []*net.UDPAddr
 	for _, player := range m.players.Players {
 		addrStr := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
+		fmt.Printf("getAllPlayersUDPAddrs%v\n", addrStr)
 		addr, err := net.ResolveUDPAddr("udp", addrStr)
 		if err != nil {
 			log.Printf("Error resolving UDP address for player ID %d: %v", player.GetId(), err)
@@ -312,6 +327,6 @@ func (m *Master) getAllPlayersUDPAddrs() []*net.UDPAddr {
 // отправка всем игрокам
 func (m *Master) sendMessageToAllPlayers(msg *pb.GameMessage, addrs []*net.UDPAddr) {
 	for _, addr := range addrs {
-		m.node.SendMessage(msg, addr)
+		m.Node.SendMessage(msg, addr)
 	}
 }

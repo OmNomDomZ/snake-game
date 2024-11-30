@@ -21,17 +21,17 @@ func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UD
 		Score:     proto.Int32(0),
 	}
 	m.players.Players = append(m.players.Players, newPlayer)
-	m.node.State.Players = m.players
+	m.Node.State.Players = m.players
 
 	ackMsg := &pb.GameMessage{
-		MsgSeq:     proto.Int64(m.node.MsgSeq),
+		MsgSeq:     proto.Int64(m.Node.MsgSeq),
 		SenderId:   proto.Int32(1),
 		ReceiverId: proto.Int32(newPlayerID),
 		Type: &pb.GameMessage_Ack{
 			Ack: &pb.GameMessage_AckMsg{},
 		},
 	}
-	m.node.SendMessage(ackMsg, addr)
+	m.Node.SendMessage(ackMsg, addr)
 
 	m.addSnakeForNewPlayer(newPlayerID)
 
@@ -67,21 +67,21 @@ func (m *Master) addSnakeForNewPlayer(playerID int32) {
 		PlayerId: proto.Int32(playerID),
 		Points: []*pb.GameState_Coord{
 			{
-				X: proto.Int32(m.node.Config.GetWidth() / 2),
-				Y: proto.Int32(m.node.Config.GetHeight() / 2),
+				X: proto.Int32(m.Node.Config.GetWidth() / 2),
+				Y: proto.Int32(m.Node.Config.GetHeight() / 2),
 			},
 		},
 		State:         pb.GameState_Snake_ALIVE.Enum(),
 		HeadDirection: pb.Direction_RIGHT.Enum(),
 	}
 
-	m.node.State.Snakes = append(m.node.State.Snakes, newSnake)
+	m.Node.State.Snakes = append(m.Node.State.Snakes, newSnake)
 }
 
 func (m *Master) handleDiscoverMessage(addr *net.UDPAddr) {
 	log.Printf("Received DiscoverMsg from %v via unicast", addr)
 	announcementMsg := &pb.GameMessage{
-		MsgSeq: proto.Int64(m.node.MsgSeq),
+		MsgSeq: proto.Int64(m.Node.MsgSeq),
 		Type: &pb.GameMessage_Announcement{
 			Announcement: &pb.GameMessage_AnnouncementMsg{
 				Games: []*pb.GameAnnouncement{m.announcement},
@@ -89,12 +89,12 @@ func (m *Master) handleDiscoverMessage(addr *net.UDPAddr) {
 		},
 	}
 
-	m.node.SendMessage(announcementMsg, addr)
+	m.Node.SendMessage(announcementMsg, addr)
 }
 
 func (m *Master) handleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId int32) {
 	var snake *pb.GameState_Snake
-	for _, s := range m.node.State.Snakes {
+	for _, s := range m.Node.State.Snakes {
 		if s.GetPlayerId() == playerId {
 			snake = s
 			break
@@ -134,27 +134,27 @@ func (m *Master) handleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId 
 
 // обработка отвалившихся узлов
 func (m *Master) checkTimeouts() {
-	ticker := time.NewTicker(time.Duration(0.8*float64(m.node.Config.GetStateDelayMs())) * time.Millisecond)
+	ticker := time.NewTicker(time.Duration(0.8*float64(m.Node.Config.GetStateDelayMs())) * time.Millisecond)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		now := time.Now()
-		m.node.Mu.Lock()
-		for playerId, lastInteraction := range m.node.LastInteraction {
-			if now.Sub(lastInteraction) > time.Duration(0.8*float64(m.node.Config.GetStateDelayMs()))*time.Millisecond {
+		m.Node.Mu.Lock()
+		for playerId, lastInteraction := range m.Node.LastInteraction {
+			if now.Sub(lastInteraction) > time.Duration(0.8*float64(m.Node.Config.GetStateDelayMs()))*time.Millisecond {
 				log.Printf("player ID: %d has timeout", playerId)
 				m.removePlayer(playerId)
 			}
 		}
-		m.node.Mu.Unlock()
+		m.Node.Mu.Unlock()
 	}
 }
 
 func (m *Master) removePlayer(playerId int32) {
-	m.node.Mu.Lock()
-	defer m.node.Mu.Unlock()
+	m.Node.Mu.Lock()
+	defer m.Node.Mu.Unlock()
 
-	delete(m.node.LastInteraction, playerId)
+	delete(m.Node.LastInteraction, playerId)
 
 	var removedPlayer *pb.GamePlayer
 	var index int
@@ -174,7 +174,7 @@ func (m *Master) removePlayer(playerId int32) {
 	if removedPlayer.GetRole() != pb.NodeRole_VIEWER {
 		// Удаляем только если игрок не VIEWER
 		m.players.Players = append(m.players.Players[:index], m.players.Players[index+1:]...)
-		delete(m.node.LastSent, fmt.Sprintf("%s:%d", removedPlayer.GetIpAddress(), removedPlayer.GetPort()))
+		delete(m.Node.LastSent, fmt.Sprintf("%s:%d", removedPlayer.GetIpAddress(), removedPlayer.GetPort()))
 	}
 
 	// Если игрок был DEPUTY, назначаем нового
@@ -203,8 +203,8 @@ func (m *Master) assignDeputy(player *pb.GamePlayer) {
 	player.Role = pb.NodeRole_DEPUTY.Enum()
 
 	roleChangeMsg := &pb.GameMessage{
-		MsgSeq:     proto.Int64(m.node.MsgSeq),
-		SenderId:   proto.Int32(m.node.PlayerInfo.GetId()),
+		MsgSeq:     proto.Int64(m.Node.MsgSeq),
+		SenderId:   proto.Int32(m.Node.PlayerInfo.GetId()),
 		ReceiverId: proto.Int32(player.GetId()),
 		Type: &pb.GameMessage_RoleChange{
 			RoleChange: &pb.GameMessage_RoleChangeMsg{
@@ -219,12 +219,12 @@ func (m *Master) assignDeputy(player *pb.GamePlayer) {
 		return
 	}
 
-	m.node.SendMessage(roleChangeMsg, playerAddr)
+	m.Node.SendMessage(roleChangeMsg, playerAddr)
 	log.Printf("Player ID: %d is assigned as DEPUTY", player.GetId())
 }
 
 func (m *Master) makeSnakeZombie(playerId int32) {
-	for _, snake := range m.node.State.Snakes {
+	for _, snake := range m.Node.State.Snakes {
 		if snake.GetPlayerId() == playerId {
 			snake.State = pb.GameState_Snake_ZOMBIE.Enum()
 			log.Printf("Snake for player ID: %d is now a ZOMBIE", playerId)
@@ -266,9 +266,9 @@ func (m *Master) stopMaster() {
 	log.Println("Switching PlayerInfo role to VIEWER...")
 
 	// Меняем роль мастера
-	m.node.PlayerInfo.Role = pb.NodeRole_VIEWER.Enum()
+	m.Node.PlayerInfo.Role = pb.NodeRole_VIEWER.Enum()
 	// Делаем змею мастера ZOMBIE
-	m.makeSnakeZombie(m.node.PlayerInfo.GetId())
+	m.makeSnakeZombie(m.Node.PlayerInfo.GetId())
 
 	m.announcement.CanJoin = proto.Bool(false)
 	// Останавливаем функции мастера
