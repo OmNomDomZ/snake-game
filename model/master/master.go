@@ -18,6 +18,7 @@ type Master struct {
 	lastStateMsg int64
 }
 
+// NewMaster создает нового мастера
 func NewMaster(multicastConn *net.UDPConn, config *pb.GameConfig) *Master {
 	localAddr, err := net.ResolveUDPAddr("udp4", ":0")
 	if err != nil {
@@ -28,7 +29,10 @@ func NewMaster(multicastConn *net.UDPConn, config *pb.GameConfig) *Master {
 		log.Fatalf("Error creating unicast socket: %v", err)
 	}
 
-	masterIP := unicastConn.LocalAddr().(*net.UDPAddr).IP.String()
+	masterIP, err := getLocalIP()
+	if err != nil {
+		log.Fatalf("Error getting local IP: %v", err)
+	}
 	masterPort := unicastConn.LocalAddr().(*net.UDPAddr).Port
 	fmt.Printf("Выделенный локальный адрес: %s:%v\n", masterIP, masterPort)
 
@@ -84,6 +88,44 @@ func NewMaster(multicastConn *net.UDPConn, config *pb.GameConfig) *Master {
 	}
 }
 
+// для получения реального ip
+func getLocalIP() (string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("error getting network interfaces: %w", err)
+	}
+
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			// IPv4
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+
+			return ip.String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("no connected network interface found")
+}
+
 func NewDeputyMaster(node *common.Node, newMaster *pb.GamePlayer, lastStateMsg int64) *Master {
 	newMaster.Role = pb.NodeRole_MASTER.Enum()
 
@@ -112,6 +154,7 @@ func NewDeputyMaster(node *common.Node, newMaster *pb.GamePlayer, lastStateMsg i
 	}
 }
 
+// Start запуск мастера
 func (m *Master) Start() {
 	go m.sendAnnouncementMessage()
 	go m.receiveMessages()
@@ -202,7 +245,7 @@ func (m *Master) receiveMessages() {
 			continue
 		}
 
-		log.Printf("Master: Received message: %v from %v", msg, addr)
+		log.Printf("Master: Received message: %v from %v", msg.String(), addr)
 		m.handleMessage(&msg, addr)
 	}
 }
@@ -271,7 +314,6 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		} else {
 			m.lastStateMsg = msg.GetMsgSeq()
 		}
-		// рисуем
 		m.Node.SendAck(msg, addr)
 
 	default:
@@ -279,6 +321,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	}
 }
 
+// id игрока по адресу
 func (m *Master) getPlayerIdByAddress(addr *net.UDPAddr) int32 {
 	for _, player := range m.players.Players {
 		if player.GetIpAddress() == addr.IP.String() && int(player.GetPort()) == addr.Port {
@@ -288,6 +331,7 @@ func (m *Master) getPlayerIdByAddress(addr *net.UDPAddr) int32 {
 	return 0
 }
 
+// рассылаем всем игрокам состояние игры
 func (m *Master) sendStateMessage() {
 	ticker := time.NewTicker(time.Duration(m.Node.Config.GetStateDelayMs()) * time.Millisecond)
 	defer ticker.Stop()
@@ -312,8 +356,12 @@ func (m *Master) sendStateMessage() {
 func (m *Master) getAllPlayersUDPAddrs() []*net.UDPAddr {
 	var addrs []*net.UDPAddr
 	for _, player := range m.players.Players {
+		// Исключаем самого мастера из списка получателей
+		if player.GetId() == m.Node.PlayerInfo.GetId() {
+			continue
+		}
 		addrStr := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
-		fmt.Printf("getAllPlayersUDPAddrs%v\n", addrStr)
+		fmt.Printf("getAllPlayersUDPAddrs: %v\n", addrStr)
 		addr, err := net.ResolveUDPAddr("udp", addrStr)
 		if err != nil {
 			log.Printf("Error resolving UDP address for player ID %d: %v", player.GetId(), err)

@@ -6,6 +6,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -119,16 +120,19 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	}
 
 	// добавляем сообщение в неподтверждённые
-	switch msg.Type.(type) {
-	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
-	default:
-		n.Mu.Lock()
-		n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
-			msg:       msg,
-			addr:      addr,
-			timestamp: time.Now(),
+	if !(n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port)) {
+		switch msg.Type.(type) {
+		case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
+
+		default:
+			n.Mu.Lock()
+			n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
+				msg:       msg,
+				addr:      addr,
+				timestamp: time.Now(),
+			}
+			n.Mu.Unlock()
 		}
-		n.Mu.Unlock()
 	}
 
 	ip := addr.IP
@@ -179,7 +183,7 @@ func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
 					}
 
 					entry.timestamp = time.Now()
-					log.Printf("Resent message with Seq: %d to %v", seq, entry.addr)
+					log.Printf("Resent message with Seq: %d to %v from %v", seq, entry.addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
 				}
 			}
 			n.Mu.Unlock()

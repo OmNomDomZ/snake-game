@@ -7,12 +7,10 @@ import (
 	"fmt"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 	"google.golang.org/protobuf/proto"
-	"image/color"
 	"math/rand"
 	"net"
 	"strconv"
@@ -49,13 +47,13 @@ func ShowMainMenu(w fyne.Window, multConn *net.UDPConn) {
 // ShowGameConfig настройки игры
 func ShowGameConfig(w fyne.Window, multConn *net.UDPConn) {
 	widthEntry := widget.NewEntry()
-	widthEntry.SetText("25")
+	widthEntry.SetText("15")
 	heightEntry := widget.NewEntry()
-	heightEntry.SetText("25")
+	heightEntry.SetText("15")
 	foodEntry := widget.NewEntry()
-	foodEntry.SetText("3")
+	foodEntry.SetText("5")
 	delayEntry := widget.NewEntry()
-	delayEntry.SetText("900")
+	delayEntry.SetText("180")
 
 	startButton := widget.NewButton("Начать игру", func() {
 		width, _ := strconv.Atoi(widthEntry.Text)
@@ -104,7 +102,7 @@ func ShowGameScreen(w fyne.Window, config *pb.GameConfig, multConn *net.UDPConn)
 	gameContent := CreateGameContent(config)
 
 	scoreLabel := widget.NewLabel("Счет: 0")
-	infoPanel := createInfoPanel(config, func() {
+	infoPanel, scoreTable, foodCountLabel := createInfoPanel(config, func() {
 		StopGameLoop()
 		ShowMainMenu(w, multConn)
 	}, scoreLabel)
@@ -117,7 +115,7 @@ func ShowGameScreen(w fyne.Window, config *pb.GameConfig, multConn *net.UDPConn)
 
 	w.SetContent(splitContent)
 
-	StartGameLoop(w, masterNode, gameContent, func(score int32) {
+	StartGameLoop(w, masterNode, gameContent, scoreTable, foodCountLabel, func(score int32) {
 		scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
 	})
 }
@@ -134,10 +132,11 @@ func CreateGameContent(config *pb.GameConfig) *fyne.Container {
 }
 
 // StartGameLoop главный цикл игры
-func StartGameLoop(w fyne.Window, masterNode *master.Master, gameContent *fyne.Container, updateScore func(int32)) {
+func StartGameLoop(w fyne.Window, masterNode *master.Master, gameContent *fyne.Container,
+	scoreTable *widget.Table, foodCountLabel *widget.Label, updateScore func(int32)) {
 	rand.NewSource(time.Now().UnixNano())
 
-	gameTicker = time.NewTicker(time.Millisecond * 120)
+	gameTicker = time.NewTicker(time.Millisecond * 60)
 
 	isRunning = true
 
@@ -152,8 +151,8 @@ func StartGameLoop(w fyne.Window, masterNode *master.Master, gameContent *fyne.C
 			case <-gameTicker.C:
 				masterNode.Node.Mu.Lock()
 				// обновления состояния игры
-				masterNode.GenerateFood()
-				masterNode.UpdateGameState()
+				//masterNode.GenerateFood()
+				//masterNode.UpdateGameState()
 				stateCopy := proto.Clone(masterNode.Node.State).(*pb.GameState)
 				configCopy := proto.Clone(masterNode.Node.Config).(*pb.GameConfig)
 				// обновление счета
@@ -166,6 +165,7 @@ func StartGameLoop(w fyne.Window, masterNode *master.Master, gameContent *fyne.C
 				}
 				updateScore(playerScore)
 				renderGameState(gameContent, stateCopy, configCopy)
+				updateInfoPanel(scoreTable, foodCountLabel, stateCopy)
 				masterNode.Node.Mu.Unlock()
 			}
 		}
@@ -180,105 +180,10 @@ func StopGameLoop() {
 	isRunning = false
 }
 
-// handleKeyInput обработка клавиш
-func handleKeyInput(e *fyne.KeyEvent, masterNode *master.Master) {
-	var newDirection pb.Direction
-
-	switch e.Name {
-	case fyne.KeyW, fyne.KeyUp:
-		newDirection = pb.Direction_UP
-	case fyne.KeyS, fyne.KeyDown:
-		newDirection = pb.Direction_DOWN
-	case fyne.KeyA, fyne.KeyLeft:
-		newDirection = pb.Direction_LEFT
-	case fyne.KeyD, fyne.KeyRight:
-		newDirection = pb.Direction_RIGHT
-	default:
-		return
-	}
-
-	masterNode.Node.Mu.Lock()
-	defer masterNode.Node.Mu.Unlock()
-
-	for _, snake := range masterNode.Node.State.Snakes {
-		if snake.GetPlayerId() == masterNode.Node.PlayerInfo.GetId() {
-			currentDirection := snake.GetHeadDirection()
-			// проверка направления
-			isOppositeDirection := func(cur, new pb.Direction) bool {
-				switch cur {
-				case pb.Direction_UP:
-					return new == pb.Direction_DOWN
-				case pb.Direction_DOWN:
-					return new == pb.Direction_UP
-				case pb.Direction_LEFT:
-					return new == pb.Direction_RIGHT
-				case pb.Direction_RIGHT:
-					return new == pb.Direction_LEFT
-				}
-				return false
-			}(currentDirection, newDirection)
-
-			if !isOppositeDirection {
-				snake.HeadDirection = newDirection.Enum()
-			}
-			break
-		}
-	}
-}
-
-// renderGameState выводит игру на экран
-func renderGameState(content *fyne.Container, state *pb.GameState, config *pb.GameConfig) {
-	content.Objects = nil
-
-	// игровое поле
-	for i := int32(0); i < config.GetWidth(); i++ {
-		for j := int32(0); j < config.GetHeight(); j++ {
-			cell := canvas.NewRectangle(color.RGBA{R: 50, G: 50, B: 50, A: 255})
-			cell.StrokeColor = color.RGBA{R: 0, G: 0, B: 0, A: 255}
-			cell.StrokeWidth = 1
-			cell.Resize(fyne.NewSize(CellSize, CellSize))
-			cell.Move(fyne.NewPos(float32(i)*CellSize, float32(j)*CellSize))
-			content.Add(cell)
-		}
-	}
-
-	// еда
-	for _, food := range state.Foods {
-		apple := canvas.NewCircle(color.RGBA{255, 0, 0, 255})
-		apple.Resize(fyne.NewSize(CellSize, CellSize))
-		x := float32(food.GetX()) * CellSize
-		y := float32(food.GetY()) * CellSize
-		apple.Move(fyne.NewPos(x, y))
-		content.Add(apple)
-	}
-
-	// змеи
-	for _, snake := range state.Snakes {
-		for i, point := range snake.Points {
-			var rect *canvas.Rectangle
-			if i == 0 {
-				// голова
-				rect = canvas.NewRectangle(color.RGBA{0, 255, 0, 255})
-			} else {
-				// тело
-				rect = canvas.NewRectangle(color.RGBA{0, 128, 0, 255})
-			}
-			rect.Resize(fyne.NewSize(CellSize, CellSize))
-			x := float32(point.GetX()) * CellSize
-			y := float32(point.GetY()) * CellSize
-			rect.Move(fyne.NewPos(x, y))
-			content.Add(rect)
-		}
-	}
-
-	content.Refresh()
-}
-
 // createInfoPanel информационная панель
-func createInfoPanel(config *pb.GameConfig, onExit func(), scoreLabel *widget.Label) *fyne.Container {
+func createInfoPanel(config *pb.GameConfig, onExit func(), scoreLabel *widget.Label) (*fyne.Container, *widget.Table, *widget.Label) {
 	data := [][]string{
 		{"Name", "Score"},
-		{"Player1", "0"},
 	}
 
 	scoreTable := widget.NewTable(
@@ -299,23 +204,26 @@ func createInfoPanel(config *pb.GameConfig, onExit func(), scoreLabel *widget.La
 	scrollableTable := container.NewScroll(scoreTable)
 	scrollableTable.SetMinSize(fyne.NewSize(150, 100))
 
-	gameInfo := widget.NewLabel(fmt.Sprintf("Текущая игра:\n\nРазмер: %dx%d\nЕда: %d", config.GetWidth(), config.GetHeight(), config.GetFoodStatic()))
-	newGameButton := widget.NewButton("Новая игра", onExit)
+	gameInfo := widget.NewLabel(fmt.Sprintf("Текущая игра:\n\nРазмер: %dx%d\n", config.GetWidth(), config.GetHeight()))
+	foodCountLabel := widget.NewLabel("Еда: 0")
 
+	newGameButton := widget.NewButton("Новая игра", onExit)
 	exitButton := widget.NewButton("Выйти", onExit)
 
 	content := container.NewVBox(
 		container.New(layout.NewPaddedLayout(), scoreLabel),
 		container.New(layout.NewPaddedLayout(), scrollableTable),
 		container.New(layout.NewPaddedLayout(), gameInfo),
+		container.New(layout.NewPaddedLayout(), foodCountLabel),
 		container.New(layout.NewPaddedLayout(), newGameButton),
 		container.New(layout.NewPaddedLayout(), exitButton),
 	)
-	return content
+
+	return content, scoreTable, foodCountLabel
 }
 
 // updateInfoPanel обновление инф панели
-func updateInfoPanel(scoreTable *widget.Table, state *pb.GameState) {
+func updateInfoPanel(scoreTable *widget.Table, foodCountLabel *widget.Label, state *pb.GameState) {
 	data := [][]string{
 		{"Name", "Score"},
 	}
@@ -323,6 +231,7 @@ func updateInfoPanel(scoreTable *widget.Table, state *pb.GameState) {
 		data = append(data, []string{player.GetName(), fmt.Sprintf("%d", player.GetScore())})
 	}
 
+	// обновляем таблицу счета
 	scoreTable.Length = func() (int, int) {
 		return len(data), len(data[0])
 	}
@@ -330,6 +239,9 @@ func updateInfoPanel(scoreTable *widget.Table, state *pb.GameState) {
 		cell.(*widget.Label).SetText(data[id.Row][id.Col])
 	}
 	scoreTable.Refresh()
+
+	// обновляем количество еды
+	foodCountLabel.SetText(fmt.Sprintf("Еда: %d", len(state.Foods)))
 }
 
 // RunApp запуск (в main)
