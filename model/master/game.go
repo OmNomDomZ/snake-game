@@ -171,16 +171,32 @@ func (m *Master) checkCollisions() {
 }
 
 // убираем умершую змею
-// TODO: поправить смерть
 func (m *Master) killSnake(crashedPlayerId, killer int32) {
-	for _, snake := range m.Node.State.Snakes {
+	m.Node.Mu.Lock()
+	defer m.Node.Mu.Unlock()
+
+	var indexToRemove int
+	var snakeToRemove *pb.GameState_Snake
+	for index, snake := range m.Node.State.Snakes {
 		if snake.GetPlayerId() == crashedPlayerId {
-			for _, point := range snake.Points {
-				if rand.Float32() < 0.5 {
-					m.Node.State.Foods = append(m.Node.State.Foods, point)
+			indexToRemove = index
+			snakeToRemove = snake
+			break
+		}
+	}
+
+	if snakeToRemove != nil {
+		for _, point := range snakeToRemove.Points {
+			if rand.Float32() < 0.5 {
+				// заменяем на еду
+				newFood := &pb.GameState_Coord{
+					X: proto.Int32(point.GetX()),
+					Y: proto.Int32(point.GetY()),
 				}
+				m.Node.State.Foods = append(m.Node.State.Foods, newFood)
 			}
 		}
+		m.Node.State.Snakes = append(m.Node.State.Snakes[:indexToRemove], m.Node.State.Snakes[indexToRemove+1:]...)
 	}
 
 	if crashedPlayerId != killer {
