@@ -77,8 +77,8 @@ func (p *Player) Start() {
 	p.discoverGames()
 	//go p.receiveMulticastMessages()
 	go p.receiveMessages()
-	go p.Node.ResendUnconfirmedMessages(p.Node.Config.GetStateDelayMs())
-	go p.Node.SendPings(p.Node.Config.GetStateDelayMs())
+	//go p.Node.ResendUnconfirmedMessages(p.Node.Config.GetStateDelayMs())
+	//go p.Node.SendPings(p.Node.Config.GetStateDelayMs())
 }
 
 func (p *Player) ReceiveMulticastMessages() {
@@ -205,14 +205,13 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	//p.Node.Mu.Unlock()
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Ack:
-		log.Printf("GET ASK")
 		if !p.haveId {
 			p.Node.PlayerInfo.Id = proto.Int32(msg.GetReceiverId())
-			p.Node.AckChan <- msg.GetMsgSeq()
+			//p.Node.AckChan <- msg.GetMsgSeq()
 			p.haveId = true
 			log.Printf("Joined game with ID: %d", p.Node.PlayerInfo.GetId())
 		} else {
-			p.Node.AckChan <- msg.GetMsgSeq()
+			//p.Node.AckChan <- msg.GetMsgSeq()
 		}
 	case *pb.GameMessage_Announcement:
 		p.MasterAddr = addr
@@ -220,25 +219,24 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		log.Printf("Received AnnouncementMsg from %v via unicast", addr)
 		p.sendJoinRequest()
 	case *pb.GameMessage_State:
-		log.Printf("GET STATE")
 		if t.State.GetState().GetStateOrder() <= p.LastStateMsg {
 			return
 		} else {
 			p.LastStateMsg = t.State.GetState().GetStateOrder()
 		}
 		p.Node.State = t.State.GetState()
-		p.Node.SendAck(msg, addr)
+		//p.Node.SendAck(msg, addr)
 		log.Printf("Received StateMsg with state_order: %d", p.Node.State.GetStateOrder())
 		p.Node.Cond.Broadcast()
 	case *pb.GameMessage_Error:
-		p.Node.SendAck(msg, addr)
+		//p.Node.SendAck(msg, addr)
 		log.Printf("Error from server: %s", t.Error.GetErrorMessage())
 	case *pb.GameMessage_RoleChange:
 		p.handleRoleChangeMessage(msg)
-		p.Node.SendAck(msg, addr)
+		//p.Node.SendAck(msg, addr)
 	case *pb.GameMessage_Ping:
 		// Отправляем AckMsg в ответ
-		p.Node.SendAck(msg, addr)
+		//p.Node.SendAck(msg, addr)
 	default:
 		log.Printf("Received unknown message")
 	}
@@ -285,18 +283,18 @@ func (p *Player) sendJoinRequest() {
 	log.Printf("Player: Sent JoinMsg to master at %v", p.MasterAddr)
 }
 
-func (p *Player) sendSteerMessage() {
-	steerMsg := &pb.GameMessage{
-		MsgSeq: proto.Int64(p.Node.MsgSeq),
-		Type: &pb.GameMessage_Steer{
-			Steer: &pb.GameMessage_SteerMsg{
-				// TODO: поправить направление
-				Direction: pb.Direction_UP.Enum(),
-			},
-		},
-	}
-	p.Node.SendMessage(steerMsg, p.MasterAddr)
-}
+//func (p *Player) sendSteerMessage() {
+//	steerMsg := &pb.GameMessage{
+//		MsgSeq: proto.Int64(p.Node.MsgSeq),
+//		Type: &pb.GameMessage_Steer{
+//			Steer: &pb.GameMessage_SteerMsg{
+//				// TODO: поправить направление
+//				Direction: pb.Direction_UP.Enum(),
+//			},
+//		},
+//	}
+//	p.Node.SendMessage(steerMsg, p.MasterAddr)
+//}
 
 // обработка отвалившихся узлов
 //func (p *Player) checkTimeouts() {

@@ -159,10 +159,10 @@ func (m *Master) Start() {
 	go m.sendAnnouncementMessage()
 	go m.receiveMessages()
 	go m.receiveMulticastMessages()
-	go m.checkTimeouts()
+	//go m.checkTimeouts()
 	go m.sendStateMessage()
-	go m.Node.ResendUnconfirmedMessages(m.Node.Config.GetStateDelayMs())
-	go m.Node.SendPings(m.Node.Config.GetStateDelayMs())
+	//go m.Node.ResendUnconfirmedMessages(m.Node.Config.GetStateDelayMs())
+	//go m.Node.SendPings(m.Node.Config.GetStateDelayMs())
 }
 
 // отправка AnnouncementMsg
@@ -256,7 +256,6 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	case *pb.GameMessage_Join:
 		// проверяем есть ли место 5*5 для новой змеи
 		if !m.announcement.GetCanJoin() {
-			log.Printf("Player can not join")
 			log.Printf("Player cannot join: no available space")
 			errorMsg := &pb.GameMessage{
 				Type: &pb.GameMessage_Error{
@@ -266,53 +265,52 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 				},
 			}
 			m.Node.SendMessage(errorMsg, addr)
-			m.Node.SendAck(msg, addr)
+			//m.Node.SendAck(msg, addr)
 		} else {
 			// обрабатываем joinMsg
-			fmt.Printf("Join msg\n")
+			log.Printf("Join msg")
 			joinMsg := t.Join
 			m.handleJoinMessage(joinMsg, addr)
 		}
 
 	case *pb.GameMessage_Discover:
 		m.handleDiscoverMessage(addr)
-		fmt.Printf("Discover msg\n")
+		log.Printf("Discover msg")
 
 	case *pb.GameMessage_Steer:
 		playerId := msg.GetSenderId()
-		fmt.Printf("Steer msg\n")
+		log.Printf("Steer msg")
 		if playerId == 0 {
 			playerId = m.getPlayerIdByAddress(addr)
 		}
 		if playerId != 0 {
 			m.handleSteerMessage(t.Steer, playerId)
-			m.Node.SendAck(msg, addr)
+			//m.Node.SendAck(msg, addr)
 		} else {
 			log.Printf("SteerMsg received from unknown address: %v", addr)
 		}
 
 	case *pb.GameMessage_RoleChange:
-		fmt.Printf("Role change msg\n")
+		log.Printf("Role change msg")
 		m.handleRoleChangeMessage(msg, addr)
-		m.Node.SendAck(msg, addr)
+		//m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ping:
-		fmt.Printf("Ping msg\n")
-		m.Node.SendAck(msg, addr)
+		log.Printf("Ping msg")
+		//m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ack:
-		fmt.Printf("Ack msg\n")
-		log.Printf(msg.String())
-		m.Node.AckChan <- msg.GetMsgSeq()
+		log.Printf("Ack msg")
+		//m.Node.AckChan <- msg.GetMsgSeq()
 
 	case *pb.GameMessage_State:
-		fmt.Printf("State msg\n")
+		log.Printf("State msg")
 		if t.State.GetState().GetStateOrder() <= m.lastStateMsg {
 			return
 		} else {
 			m.lastStateMsg = t.State.GetState().GetStateOrder()
 		}
-		m.Node.SendAck(msg, addr)
+		//m.Node.SendAck(msg, addr)
 
 	default:
 		log.Printf("Received unknown message type from %v", addr)
@@ -338,12 +336,15 @@ func (m *Master) sendStateMessage() {
 		m.GenerateFood()
 		m.UpdateGameState()
 
+		newStateOrder := m.Node.State.GetStateOrder() + 1
+		m.Node.State.StateOrder = proto.Int32(newStateOrder)
+
 		stateMsg := &pb.GameMessage{
 			MsgSeq: proto.Int64(m.Node.MsgSeq),
 			Type: &pb.GameMessage_State{
 				State: &pb.GameMessage_StateMsg{
 					State: &pb.GameState{
-						StateOrder: proto.Int32(m.Node.State.GetStateOrder() + 1),
+						StateOrder: proto.Int32(newStateOrder),
 						Snakes:     m.Node.State.GetSnakes(),
 						Foods:      m.Node.State.GetFoods(),
 						Players:    m.Node.State.GetPlayers(),

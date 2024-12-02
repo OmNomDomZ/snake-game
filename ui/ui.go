@@ -142,16 +142,6 @@ func ShowJoinGame(w fyne.Window, multConn *net.UDPConn) {
 	gameList.PlaceHolder = "Выберите игру"
 	gameList.Resize(fyne.NewSize(300, 50))
 
-	//gameList := widget.NewList(
-	//	func() int { return 0 },
-	//	func() fyne.CanvasObject {
-	//		return widget.NewLabel("Loading...")
-	//	},
-	//	func(i widget.ListItemID, o fyne.CanvasObject) {
-	//		o.(*widget.Label).SetText("Loading...")
-	//	},
-	//)
-
 	playerNameEntry := widget.NewEntry()
 	playerNameEntry.SetPlaceHolder("Введите ваше имя")
 
@@ -222,25 +212,25 @@ func ShowPlayerGameScreen(w fyne.Window, playerNode *player.Player, playerName s
 	playerNode.AnnouncementMsg = selectedGame.AnnouncementMsg
 	playerNode.Start()
 
-	//gameContent := CreateGameContent(playerNode.Node.Config)
-	//
-	//scoreLabel := widget.NewLabel("Счет: 0")
-	//infoPanel, scoreTable, foodCountLabel := createInfoPanel(playerNode.Node.Config, func() {
-	//	StopGameLoop()
-	//	ShowMainMenu(w, multConn)
-	//}, scoreLabel)
-	//
-	//splitContent := container.NewHSplit(
-	//	gameContent,
-	//	infoPanel,
-	//)
-	//splitContent.SetOffset(0.7)
-	//
-	//w.SetContent(splitContent)
-	//
-	//StartGameLoop(w, playerNode.Node, gameContent, scoreTable, foodCountLabel, func(score int32) {
-	//	scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
-	//})
+	gameContent := CreateGameContent(playerNode.Node.Config)
+
+	scoreLabel := widget.NewLabel("Счет: 0")
+	infoPanel, scoreTable, foodCountLabel := createInfoPanel(playerNode.Node.Config, func() {
+		StopGameLoop()
+		ShowMainMenu(w, multConn)
+	}, scoreLabel)
+
+	splitContent := container.NewHSplit(
+		gameContent,
+		infoPanel,
+	)
+	splitContent.SetOffset(0.7)
+
+	w.SetContent(splitContent)
+
+	StartGameLoop(w, playerNode.Node, gameContent, scoreTable, foodCountLabel, func(score int32) {
+		scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
+	})
 }
 
 // CreateGameContent создает холст

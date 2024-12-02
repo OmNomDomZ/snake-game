@@ -65,37 +65,37 @@ func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPC
 }
 
 // SendAck любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
-func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
-	switch msg.Type.(type) {
-	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
-		return
-	}
-
-	ackMsg := &pb.GameMessage{
-		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
-		SenderId:   proto.Int32(n.PlayerInfo.GetId()),
-		ReceiverId: proto.Int32(msg.GetSenderId()),
-		Type: &pb.GameMessage_Ack{
-			Ack: &pb.GameMessage_AckMsg{},
-		},
-	}
-
-	n.SendMessage(ackMsg, addr)
-	log.Printf("Sent AckMsg to %v", addr)
-}
+//func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
+//	switch msg.Type.(type) {
+//	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
+//		return
+//	}
+//
+//	ackMsg := &pb.GameMessage{
+//		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
+//		SenderId:   proto.Int32(n.PlayerInfo.GetId()),
+//		ReceiverId: proto.Int32(msg.GetSenderId()),
+//		Type: &pb.GameMessage_Ack{
+//			Ack: &pb.GameMessage_AckMsg{},
+//		},
+//	}
+//
+//	n.SendMessage(ackMsg, addr)
+//	log.Printf("Sent AckMsg to %v", addr)
+//}
 
 // SendPing отправка
-func (n *Node) SendPing(addr *net.UDPAddr) {
-	pingMsg := &pb.GameMessage{
-		MsgSeq:   proto.Int64(n.MsgSeq),
-		SenderId: proto.Int32(n.PlayerInfo.GetId()),
-		Type: &pb.GameMessage_Ping{
-			Ping: &pb.GameMessage_PingMsg{},
-		},
-	}
-
-	n.SendMessage(pingMsg, addr)
-}
+//func (n *Node) SendPing(addr *net.UDPAddr) {
+//	pingMsg := &pb.GameMessage{
+//		MsgSeq:   proto.Int64(n.MsgSeq),
+//		SenderId: proto.Int32(n.PlayerInfo.GetId()),
+//		Type: &pb.GameMessage_Ping{
+//			Ping: &pb.GameMessage_PingMsg{},
+//		},
+//	}
+//
+//	n.SendMessage(pingMsg, addr)
+//}
 
 // SendMessage отправка сообщения и добавление его в неподтверждённые
 func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
@@ -117,11 +117,6 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	}
 
 	_, err = n.UnicastConn.WriteToUDP(data, addr)
-	switch msg.Type.(type) {
-	case *pb.GameMessage_State:
-		log.Printf("SEND STATE MSG to %v", addr)
-	}
-
 	if err != nil {
 		log.Printf("Error sending Message: %v", err)
 		return
@@ -130,26 +125,26 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	// добавляем сообщение в неподтверждённые
 	//n.Mu.Lock()
 	//defer n.Mu.Unlock()
-	if !(n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port)) {
-		switch msg.Type.(type) {
-		case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
-
-		default:
-			//n.Mu.Lock()
-			n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
-				msg:       msg,
-				addr:      addr,
-				timestamp: time.Now(),
-			}
-			//n.Mu.Unlock()
-		}
-	}
+	//if !(n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port)) {
+	//	switch msg.Type.(type) {
+	//	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
+	//
+	//	default:
+	//		//n.Mu.Lock()
+	//		n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
+	//			msg:       msg,
+	//			addr:      addr,
+	//			timestamp: time.Now(),
+	//		}
+	//		//n.Mu.Unlock()
+	//	}
+	//}
 
 	ip := addr.IP
 	port := addr.Port
 	address := fmt.Sprintf("%s:%d", ip, port)
 	//n.LastSent[address] = time.Now()
-	log.Printf("Sent message with Seq: %d to %v from %v", msg.GetMsgSeq(), addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
+	log.Printf("Sent message %v with Seq: %d to %v from %v", msg.Type, msg.GetMsgSeq(), addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
 
 	if n.PlayerInfo.GetIpAddress() == addr.IP.String() &&
 		n.PlayerInfo.GetPort() == int32(addr.Port) {
@@ -168,77 +163,76 @@ func (n *Node) HandleAck(seq int64) {
 }
 
 // ResendUnconfirmedMessages проверка и переотправка неподтвержденных сообщений
-func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
-	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		// ответ не пришел, заново отправляем сообщение
-		case <-ticker.C:
-			now := time.Now()
-			n.Mu.Lock()
-			for seq, entry := range n.unconfirmedMessages {
-				if now.Sub(entry.timestamp) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
-					// переотправка сообщения
-					data, err := proto.Marshal(entry.msg)
-					if err != nil {
-						log.Printf("Error marshalling Message: %v", err)
-						continue
-					}
-					_, err = n.UnicastConn.WriteToUDP(data, entry.addr)
-					if err != nil {
-						fmt.Printf("Error sending Message: %v", err)
-						continue
-					}
-
-					entry.timestamp = time.Now()
-					log.Printf("Resent message with Seq: %d to %v from %v", seq, entry.addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
-					log.Printf(entry.msg.String())
-				}
-			}
-			n.Mu.Unlock()
-		// ответ пришел, удаляем из мапы
-		case seq := <-n.AckChan:
-			//n.Mu.Lock()
-			//defer n.Mu.Unlock()
-			log.Printf("DELETE ASK FROM MAP")
-			n.HandleAck(seq)
-		}
-	}
-}
+//func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
+//	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
+//	defer ticker.Stop()
+//
+//	for {
+//		select {
+//		// ответ не пришел, заново отправляем сообщение
+//		case <-ticker.C:
+//			now := time.Now()
+//			n.Mu.Lock()
+//			for seq, entry := range n.unconfirmedMessages {
+//				if now.Sub(entry.timestamp) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
+//					// переотправка сообщения
+//					data, err := proto.Marshal(entry.msg)
+//					if err != nil {
+//						log.Printf("Error marshalling Message: %v", err)
+//						continue
+//					}
+//					_, err = n.UnicastConn.WriteToUDP(data, entry.addr)
+//					if err != nil {
+//						fmt.Printf("Error sending Message: %v", err)
+//						continue
+//					}
+//
+//					entry.timestamp = time.Now()
+//					log.Printf("Resent message with Seq: %d to %v from %v", seq, entry.addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
+//					log.Printf(entry.msg.String())
+//				}
+//			}
+//			n.Mu.Unlock()
+//		// ответ пришел, удаляем из мапы
+//		case seq := <-n.AckChan:
+//			//n.Mu.Lock()
+//			//defer n.Mu.Unlock()
+//			n.HandleAck(seq)
+//		}
+//	}
+//}
 
 // SendPings отправка PingMsg, если не было отправлено сообщений в течение stateDelayMs/10
-func (n *Node) SendPings(stateDelayMs int32) {
-	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		now := time.Now()
-		n.Mu.Lock()
-		if n.State == nil {
-			n.Mu.Unlock()
-			return
-		}
-		for _, player := range n.State.Players.Players {
-			if player.GetId() == n.PlayerInfo.GetId() {
-				continue
-			}
-			addrKey := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
-			last, exists := n.LastSent[addrKey]
-			if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
-				playerAddr, err := net.ResolveUDPAddr("udp", addrKey)
-				if err != nil {
-					log.Printf("Error resolving address for Ping: %v", err)
-					continue
-				}
-				n.SendPing(playerAddr)
-				n.LastSent[addrKey] = now
-			}
-		}
-		n.Mu.Unlock()
-	}
-}
+//func (n *Node) SendPings(stateDelayMs int32) {
+//	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
+//	defer ticker.Stop()
+//
+//	for range ticker.C {
+//		now := time.Now()
+//		n.Mu.Lock()
+//		if n.State == nil {
+//			n.Mu.Unlock()
+//			return
+//		}
+//		for _, player := range n.State.Players.Players {
+//			if player.GetId() == n.PlayerInfo.GetId() {
+//				continue
+//			}
+//			addrKey := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
+//			last, exists := n.LastSent[addrKey]
+//			if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
+//				playerAddr, err := net.ResolveUDPAddr("udp", addrKey)
+//				if err != nil {
+//					log.Printf("Error resolving address for Ping: %v", err)
+//					continue
+//				}
+//				n.SendPing(playerAddr)
+//				n.LastSent[addrKey] = now
+//			}
+//		}
+//		n.Mu.Unlock()
+//	}
+//}
 
 //// обработка SteerMsg
 //func (n *Node) HandleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId int32) {
