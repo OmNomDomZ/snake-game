@@ -15,7 +15,7 @@ type Master struct {
 
 	announcement *pb.GameAnnouncement
 	players      *pb.GamePlayers
-	lastStateMsg int64
+	lastStateMsg int32
 }
 
 // NewMaster создает нового мастера
@@ -34,7 +34,7 @@ func NewMaster(multicastConn *net.UDPConn, config *pb.GameConfig) *Master {
 		log.Fatalf("Error getting local IP: %v", err)
 	}
 	masterPort := unicastConn.LocalAddr().(*net.UDPAddr).Port
-	fmt.Printf("Выделенный локальный адрес: %s:%v\n", masterIP, masterPort)
+	log.Printf("Выделенный локальный адрес: %s:%v\n", masterIP, masterPort)
 
 	masterPlayer := &pb.GamePlayer{
 		Name:      proto.String("Master"),
@@ -75,7 +75,7 @@ func NewMaster(multicastConn *net.UDPConn, config *pb.GameConfig) *Master {
 		Players:  players,
 		Config:   config,
 		CanJoin:  proto.Bool(true),
-		GameName: proto.String("Game"),
+		GameName: proto.String("Game1"),
 	}
 
 	node := common.NewNode(state, config, multicastConn, unicastConn, masterPlayer)
@@ -126,33 +126,33 @@ func getLocalIP() (string, error) {
 	return "", fmt.Errorf("no connected network interface found")
 }
 
-func NewDeputyMaster(node *common.Node, newMaster *pb.GamePlayer, lastStateMsg int64) *Master {
-	newMaster.Role = pb.NodeRole_MASTER.Enum()
-
-	config := node.Config
-
-	unicastConn := node.UnicastConn
-
-	state := node.State
-
-	announcement := &pb.GameAnnouncement{
-		Players:  state.Players,
-		Config:   config,
-		CanJoin:  proto.Bool(true),
-		GameName: proto.String("Game"),
-	}
-
-	multicastConn := node.MulticastConn
-
-	newNode := common.NewNode(state, config, multicastConn, unicastConn, newMaster)
-
-	return &Master{
-		Node:         newNode,
-		announcement: announcement,
-		players:      state.Players,
-		lastStateMsg: lastStateMsg,
-	}
-}
+//func NewDeputyMaster(node *common.Node, newMaster *pb.GamePlayer, lastStateMsg int64) *Master {
+//	newMaster.Role = pb.NodeRole_MASTER.Enum()
+//
+//	config := node.Config
+//
+//	unicastConn := node.UnicastConn
+//
+//	state := node.State
+//
+//	announcement := &pb.GameAnnouncement{
+//		Players:  state.Players,
+//		Config:   config,
+//		CanJoin:  proto.Bool(true),
+//		GameName: proto.String("Game"),
+//	}
+//
+//	multicastConn := node.MulticastConn
+//
+//	newNode := common.NewNode(state, config, multicastConn, unicastConn, newMaster)
+//
+//	return &Master{
+//		Node:         newNode,
+//		announcement: announcement,
+//		players:      state.Players,
+//		lastStateMsg: lastStateMsg,
+//	}
+//}
 
 // Start запуск мастера
 func (m *Master) Start() {
@@ -239,7 +239,6 @@ func (m *Master) receiveMessages() {
 
 		var msg pb.GameMessage
 		err = proto.Unmarshal(buf[:n], &msg)
-		log.Printf(msg.String())
 		if err != nil {
 			log.Printf("Error unmarshalling message: %v", err)
 			continue
@@ -275,8 +274,6 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 			m.handleJoinMessage(joinMsg, addr)
 		}
 
-		m.Node.SendAck(msg, addr)
-
 	case *pb.GameMessage_Discover:
 		m.handleDiscoverMessage(addr)
 		fmt.Printf("Discover msg\n")
@@ -305,14 +302,15 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 
 	case *pb.GameMessage_Ack:
 		fmt.Printf("Ack msg\n")
+		log.Printf(msg.String())
 		m.Node.AckChan <- msg.GetMsgSeq()
 
 	case *pb.GameMessage_State:
 		fmt.Printf("State msg\n")
-		if msg.GetMsgSeq() <= m.lastStateMsg {
+		if t.State.GetState().GetStateOrder() <= m.lastStateMsg {
 			return
 		} else {
-			m.lastStateMsg = msg.GetMsgSeq()
+			m.lastStateMsg = t.State.GetState().GetStateOrder()
 		}
 		m.Node.SendAck(msg, addr)
 
@@ -344,11 +342,17 @@ func (m *Master) sendStateMessage() {
 			MsgSeq: proto.Int64(m.Node.MsgSeq),
 			Type: &pb.GameMessage_State{
 				State: &pb.GameMessage_StateMsg{
-					State: m.Node.State,
+					State: &pb.GameState{
+						StateOrder: proto.Int32(m.Node.State.GetStateOrder() + 1),
+						Snakes:     m.Node.State.GetSnakes(),
+						Foods:      m.Node.State.GetFoods(),
+						Players:    m.Node.State.GetPlayers(),
+					},
 				},
 			},
 		}
-		m.sendMessageToAllPlayers(stateMsg, m.getAllPlayersUDPAddrs())
+		allAddrs := m.getAllPlayersUDPAddrs()
+		m.sendMessageToAllPlayers(stateMsg, allAddrs)
 	}
 }
 
@@ -361,7 +365,6 @@ func (m *Master) getAllPlayersUDPAddrs() []*net.UDPAddr {
 			continue
 		}
 		addrStr := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
-		fmt.Printf("getAllPlayersUDPAddrs: %v\n", addrStr)
 		addr, err := net.ResolveUDPAddr("udp", addrStr)
 		if err != nil {
 			log.Printf("Error resolving UDP address for player ID %d: %v", player.GetId(), err)

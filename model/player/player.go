@@ -3,18 +3,32 @@ package player
 import (
 	"SnakeGame/model/common"
 	pb "SnakeGame/model/proto"
+	"fmt"
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
 	"time"
 )
 
-type Player struct {
-	node *common.Node
+type DiscoveredGame struct {
+	Players         *pb.GamePlayers
+	Config          *pb.GameConfig
+	CanJoin         bool
+	GameName        string
+	AnnouncementMsg *pb.GameMessage_AnnouncementMsg
+	MasterAddr      *net.UDPAddr
+}
 
-	announcementMsg *pb.GameMessage_AnnouncementMsg
-	masterAddr      *net.UDPAddr
-	lastStateMsg    int64
+type Player struct {
+	Node *common.Node
+
+	AnnouncementMsg *pb.GameMessage_AnnouncementMsg
+	MasterAddr      *net.UDPAddr
+	LastStateMsg    int32
+
+	haveId bool
+
+	DiscoveredGames []DiscoveredGame
 }
 
 func NewPlayer(multicastConn *net.UDPConn) *Player {
@@ -28,36 +42,49 @@ func NewPlayer(multicastConn *net.UDPConn) *Player {
 		log.Fatalf("Error creating unicast socket: %v", err)
 	}
 
+	playerIP, err := getLocalIP()
+	if err != nil {
+		log.Fatalf("Error getting local IP: %v", err)
+	}
+	playerPort := unicastConn.LocalAddr().(*net.UDPAddr).Port
+	fmt.Printf("Выделенный локальный адрес: %s:%v\n", playerIP, playerPort)
+
 	playerInfo := &pb.GamePlayer{
-		Name:  proto.String("Player"),
-		Id:    proto.Int32(0),
-		Role:  pb.NodeRole_NORMAL.Enum(),
-		Type:  pb.PlayerType_HUMAN.Enum(),
-		Score: proto.Int32(0),
+		Name:      proto.String("Player"),
+		Id:        proto.Int32(0),
+		Role:      pb.NodeRole_NORMAL.Enum(),
+		Type:      pb.PlayerType_HUMAN.Enum(),
+		Score:     proto.Int32(0),
+		IpAddress: proto.String(playerIP),
+		Port:      proto.Int32(int32(playerPort)),
 	}
 
 	node := common.NewNode(nil, nil, multicastConn, unicastConn, playerInfo)
 
 	return &Player{
-		node:            node,
-		announcementMsg: nil,
-		masterAddr:      nil,
-		lastStateMsg:    0,
+		Node:            node,
+		AnnouncementMsg: nil,
+		MasterAddr:      nil,
+		LastStateMsg:    0,
+
+		haveId: false,
+
+		DiscoveredGames: []DiscoveredGame{},
 	}
 }
 
 func (p *Player) Start() {
 	p.discoverGames()
-	go p.receiveMulticastMessages()
+	//go p.receiveMulticastMessages()
 	go p.receiveMessages()
-	go p.node.ResendUnconfirmedMessages(p.node.Config.GetStateDelayMs())
-	go p.node.SendPings(p.node.Config.GetStateDelayMs())
+	go p.Node.ResendUnconfirmedMessages(p.Node.Config.GetStateDelayMs())
+	go p.Node.SendPings(p.Node.Config.GetStateDelayMs())
 }
 
-func (p *Player) receiveMulticastMessages() {
+func (p *Player) ReceiveMulticastMessages() {
 	for {
 		buf := make([]byte, 4096)
-		n, addr, err := p.node.MulticastConn.ReadFromUDP(buf)
+		n, addr, err := p.Node.MulticastConn.ReadFromUDP(buf)
 		if err != nil {
 			log.Printf("Error receiving multicast message: %v", err)
 			continue
@@ -74,23 +101,86 @@ func (p *Player) receiveMulticastMessages() {
 	}
 }
 
+// для получения реального ip
+func getLocalIP() (string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("error getting network interfaces: %w", err)
+	}
+
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			// IPv4
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+
+			return ip.String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("no connected network interface found")
+}
+
 func (p *Player) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Announcement:
-		p.masterAddr = addr
-		p.announcementMsg = t.Announcement
-		p.node.Config = t.Announcement.Games[0].GetConfig()
-		log.Printf("Received AnnouncementMsg from %v via multicast", addr)
-		p.sendJoinRequest()
+
+		for _, game := range t.Announcement.Games {
+			p.addDiscoveredGame(game, addr, t.Announcement)
+		}
+
+		//p.MasterAddr = addr
+		//p.AnnouncementMsg = t.Announcement
+		//p.Node.Config = t.Announcement.Games[0].GetConfig()
+		//log.Printf("Received AnnouncementMsg from %v via multicast", addr)
 	default:
 		log.Printf("Received unknown multicast message from %v", addr)
 	}
 }
 
+func (p *Player) addDiscoveredGame(announcement *pb.GameAnnouncement, addr *net.UDPAddr, announcementMsg *pb.GameMessage_AnnouncementMsg) {
+	for _, game := range p.DiscoveredGames {
+		if game.GameName == announcement.GetGameName() {
+			//log.Printf("Game '%s' already discovered, skipping.", announcement.GetGameName())
+			return
+		}
+	}
+
+	newGame := DiscoveredGame{
+		Players:         announcement.GetPlayers(),
+		Config:          announcement.GetConfig(),
+		CanJoin:         announcement.GetCanJoin(),
+		GameName:        announcement.GetGameName(),
+		AnnouncementMsg: announcementMsg,
+		MasterAddr:      addr,
+	}
+
+	p.DiscoveredGames = append(p.DiscoveredGames, newGame)
+	log.Printf("Discovered new game: '%s'", announcement.GetGameName())
+}
+
 func (p *Player) receiveMessages() {
 	for {
 		buf := make([]byte, 4096)
-		n, addr, err := p.node.UnicastConn.ReadFromUDP(buf)
+		n, addr, err := p.Node.UnicastConn.ReadFromUDP(buf)
 		if err != nil {
 			log.Printf("Error receiving message: %v", err)
 			continue
@@ -103,90 +193,101 @@ func (p *Player) receiveMessages() {
 			continue
 		}
 
-		log.Printf("Player: Received message: %v from %v", msg, addr)
+		log.Printf("Player: Received message: %v from %v", msg.String(), addr)
 		p.handleMessage(&msg, addr)
 	}
 }
 
 func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
-	p.node.LastInteraction[msg.GetSenderId()] = time.Now()
+	p.Node.Mu.Lock()
+	defer p.Node.Mu.Unlock()
+	p.Node.LastInteraction[msg.GetSenderId()] = time.Now()
+	//p.Node.Mu.Unlock()
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Ack:
-		p.node.PlayerInfo.Id = proto.Int32(msg.GetReceiverId())
-		p.node.AckChan <- msg.GetMsgSeq()
-		log.Printf("Joined game with ID: %d", p.node.PlayerInfo.GetId())
+		log.Printf("GET ASK")
+		if !p.haveId {
+			p.Node.PlayerInfo.Id = proto.Int32(msg.GetReceiverId())
+			p.Node.AckChan <- msg.GetMsgSeq()
+			p.haveId = true
+			log.Printf("Joined game with ID: %d", p.Node.PlayerInfo.GetId())
+		} else {
+			p.Node.AckChan <- msg.GetMsgSeq()
+		}
 	case *pb.GameMessage_Announcement:
-		p.masterAddr = addr
-		p.announcementMsg = t.Announcement
+		p.MasterAddr = addr
+		p.AnnouncementMsg = t.Announcement
 		log.Printf("Received AnnouncementMsg from %v via unicast", addr)
 		p.sendJoinRequest()
 	case *pb.GameMessage_State:
-		if msg.GetMsgSeq() <= p.lastStateMsg {
+		log.Printf("GET STATE")
+		if t.State.GetState().GetStateOrder() <= p.LastStateMsg {
 			return
 		} else {
-			p.lastStateMsg = msg.GetMsgSeq()
+			p.LastStateMsg = t.State.GetState().GetStateOrder()
 		}
-		p.node.State = t.State.GetState()
-		p.node.SendAck(msg, addr)
-		log.Printf("Received StateMsg with state_order: %d", p.node.State.GetStateOrder())
-		// Обновить интерфейс пользователя (интегрировать с UI)
+		p.Node.State = t.State.GetState()
+		p.Node.SendAck(msg, addr)
+		log.Printf("Received StateMsg with state_order: %d", p.Node.State.GetStateOrder())
+		p.Node.Cond.Broadcast()
 	case *pb.GameMessage_Error:
-		p.node.SendAck(msg, addr)
+		p.Node.SendAck(msg, addr)
 		log.Printf("Error from server: %s", t.Error.GetErrorMessage())
 	case *pb.GameMessage_RoleChange:
 		p.handleRoleChangeMessage(msg)
-		p.node.SendAck(msg, addr)
+		p.Node.SendAck(msg, addr)
 	case *pb.GameMessage_Ping:
 		// Отправляем AckMsg в ответ
-		p.node.SendAck(msg, addr)
+		p.Node.SendAck(msg, addr)
 	default:
 		log.Printf("Received unknown message")
 	}
 }
 
+// DiscoverGames игрок ищет доступные игры
 func (p *Player) discoverGames() {
 	discoverMsg := &pb.GameMessage{
-		MsgSeq: proto.Int64(p.node.MsgSeq),
+		MsgSeq: proto.Int64(p.Node.MsgSeq),
 		Type: &pb.GameMessage_Discover{
 			Discover: &pb.GameMessage_DiscoverMsg{},
 		},
 	}
 
-	multicastAddr, err := net.ResolveUDPAddr("udp", p.node.MulticastAddress)
+	multicastAddr, err := net.ResolveUDPAddr("udp", p.Node.MulticastAddress)
 	if err != nil {
 		log.Fatalf("Error resolving multicast address: %v", err)
 		return
 	}
 
-	p.node.SendMessage(discoverMsg, multicastAddr)
+	p.Node.SendMessage(discoverMsg, multicastAddr)
 	log.Printf("Player: Sent DiscoverMsg to multicast address %v", multicastAddr)
 }
 
 func (p *Player) sendJoinRequest() {
-	if p.announcementMsg == nil || len(p.announcementMsg.Games) == 0 {
+	if p.AnnouncementMsg == nil || len(p.AnnouncementMsg.Games) == 0 {
 		log.Printf("Player: No available games to join")
 		return
 	}
 
 	joinMsg := &pb.GameMessage{
-		MsgSeq: proto.Int64(p.node.MsgSeq),
+		MsgSeq: proto.Int64(p.Node.MsgSeq),
 		Type: &pb.GameMessage_Join{
 			Join: &pb.GameMessage_JoinMsg{
 				PlayerType:    pb.PlayerType_HUMAN.Enum(),
-				PlayerName:    p.node.PlayerInfo.Name,
-				GameName:      proto.String(p.announcementMsg.Games[0].GetGameName()),
+				PlayerName:    p.Node.PlayerInfo.Name,
+				GameName:      proto.String(p.AnnouncementMsg.Games[0].GetGameName()),
 				RequestedRole: pb.NodeRole_NORMAL.Enum(),
 			},
 		},
 	}
 
-	p.node.SendMessage(joinMsg, p.masterAddr)
-	log.Printf("Player: Sent JoinMsg to master at %v", p.masterAddr)
+	p.Node.SendMessage(joinMsg, p.MasterAddr)
+	log.Printf("Player: Sent JoinMsg to master at %v", p.MasterAddr)
 }
 
 func (p *Player) sendSteerMessage() {
 	steerMsg := &pb.GameMessage{
-		MsgSeq: proto.Int64(p.node.MsgSeq),
+		MsgSeq: proto.Int64(p.Node.MsgSeq),
 		Type: &pb.GameMessage_Steer{
 			Steer: &pb.GameMessage_SteerMsg{
 				// TODO: поправить направление
@@ -194,7 +295,7 @@ func (p *Player) sendSteerMessage() {
 			},
 		},
 	}
-	p.node.SendMessage(steerMsg, p.masterAddr)
+	p.Node.SendMessage(steerMsg, p.MasterAddr)
 }
 
 // обработка отвалившихся узлов
@@ -220,8 +321,8 @@ func (p *Player) sendSteerMessage() {
 //							p.node.Mu.Unlock()
 //							continue
 //						}
-//						p.masterAddr = addr
-//						log.Printf("Switched to DEPUTY as new MASTER at %v", p.masterAddr)
+//						p.MasterAddr = addr
+//						log.Printf("Switched to DEPUTY as new MASTER at %v", p.MasterAddr)
 //					} else {
 //						log.Printf("No DEPUTY available to switch to")
 //					}
@@ -251,7 +352,7 @@ func (p *Player) sendSteerMessage() {
 //	p.node.PlayerInfo.Role = pb.NodeRole_MASTER.Enum()
 //
 //	// Создаем новый мастер
-//	masterNode := master.NewDeputyMaster(p.node, p.node.PlayerInfo, p.lastStateMsg)
+//	masterNode := master.NewDeputyMaster(p.node, p.node.PlayerInfo, p.LastStateMsg)
 //	// Запускаем мастер
 //	go masterNode.Start()
 //	// Останавливаем функции игрока

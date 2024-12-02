@@ -38,12 +38,13 @@ type Node struct {
 
 	unconfirmedMessages map[int64]*MessageEntry
 	Mu                  sync.Mutex
+	Cond                *sync.Cond
 	AckChan             chan int64
 }
 
 func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPConn,
 	unicastConn *net.UDPConn, playerInfo *pb.GamePlayer) *Node {
-	return &Node{
+	node := &Node{
 		State:            state,
 		Config:           config,
 		MulticastAddress: MulticastAddr,
@@ -52,23 +53,21 @@ func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPC
 		PlayerInfo:       playerInfo,
 		MsgSeq:           1,
 
-		LastInteraction: make(map[int32]time.Time),
-		LastSent:        make(map[string]time.Time),
-
+		LastInteraction:     make(map[int32]time.Time),
+		LastSent:            make(map[string]time.Time),
 		unconfirmedMessages: make(map[int64]*MessageEntry),
 		AckChan:             make(chan int64),
 	}
+
+	node.Cond = sync.NewCond(&node.Mu)
+
+	return node
 }
 
 // SendAck любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
 func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch msg.Type.(type) {
 	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
-		return
-	}
-
-	if msg.GetSenderId() == msg.GetReceiverId() {
-		fmt.Printf("msg.GetSenderId() == msg.GetReceiverId()\n")
 		return
 	}
 
@@ -100,11 +99,15 @@ func (n *Node) SendPing(addr *net.UDPAddr) {
 
 // SendMessage отправка сообщения и добавление его в неподтверждённые
 func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
+	if n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port) {
+		return
+	}
+
 	// увеличиваем порядковый номер сообщения
-	n.Mu.Lock()
+	//n.Mu.Lock()
 	msg.MsgSeq = proto.Int64(n.MsgSeq)
 	n.MsgSeq++
-	n.Mu.Unlock()
+	//n.Mu.Unlock()
 
 	// отправляем
 	data, err := proto.Marshal(msg)
@@ -114,24 +117,31 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	}
 
 	_, err = n.UnicastConn.WriteToUDP(data, addr)
+	switch msg.Type.(type) {
+	case *pb.GameMessage_State:
+		log.Printf("SEND STATE MSG to %v", addr)
+	}
+
 	if err != nil {
 		log.Printf("Error sending Message: %v", err)
 		return
 	}
 
 	// добавляем сообщение в неподтверждённые
+	//n.Mu.Lock()
+	//defer n.Mu.Unlock()
 	if !(n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port)) {
 		switch msg.Type.(type) {
 		case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
 
 		default:
-			n.Mu.Lock()
+			//n.Mu.Lock()
 			n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
 				msg:       msg,
 				addr:      addr,
 				timestamp: time.Now(),
 			}
-			n.Mu.Unlock()
+			//n.Mu.Unlock()
 		}
 	}
 
@@ -139,7 +149,7 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	port := addr.Port
 	address := fmt.Sprintf("%s:%d", ip, port)
 	//n.LastSent[address] = time.Now()
-	log.Printf("Sent message with Seq: %d to %v", msg.GetMsgSeq(), addr)
+	log.Printf("Sent message with Seq: %d to %v from %v", msg.GetMsgSeq(), addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
 
 	if n.PlayerInfo.GetIpAddress() == addr.IP.String() &&
 		n.PlayerInfo.GetPort() == int32(addr.Port) {
@@ -184,11 +194,15 @@ func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
 
 					entry.timestamp = time.Now()
 					log.Printf("Resent message with Seq: %d to %v from %v", seq, entry.addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
+					log.Printf(entry.msg.String())
 				}
 			}
 			n.Mu.Unlock()
 		// ответ пришел, удаляем из мапы
 		case seq := <-n.AckChan:
+			//n.Mu.Lock()
+			//defer n.Mu.Unlock()
+			log.Printf("DELETE ASK FROM MAP")
 			n.HandleAck(seq)
 		}
 	}
@@ -202,6 +216,10 @@ func (n *Node) SendPings(stateDelayMs int32) {
 	for range ticker.C {
 		now := time.Now()
 		n.Mu.Lock()
+		if n.State == nil {
+			n.Mu.Unlock()
+			return
+		}
 		for _, player := range n.State.Players.Players {
 			if player.GetId() == n.PlayerInfo.GetId() {
 				continue

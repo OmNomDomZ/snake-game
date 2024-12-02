@@ -132,6 +132,20 @@ func (m *Master) handleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId 
 	log.Printf("Player ID: %d changed direction to: %v", playerId, newDirection)
 }
 
+func (m *Master) sendJoinAck(msg *pb.GameMessage, addr *net.UDPAddr) {
+	ackMsg := &pb.GameMessage{
+		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
+		SenderId:   proto.Int32(m.Node.PlayerInfo.GetId()),
+		ReceiverId: proto.Int32(2),
+		Type: &pb.GameMessage_Ack{
+			Ack: &pb.GameMessage_AckMsg{},
+		},
+	}
+
+	m.Node.SendMessage(ackMsg, addr)
+	log.Printf("Sent AckJoinMsg to %v", addr)
+}
+
 // обработка отвалившихся узлов
 func (m *Master) checkTimeouts() {
 	ticker := time.NewTicker(time.Duration(0.8*float64(m.Node.Config.GetStateDelayMs())) * time.Millisecond)

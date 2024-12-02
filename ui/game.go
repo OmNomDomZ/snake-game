@@ -1,15 +1,17 @@
 package ui
 
 import (
-	"SnakeGame/model/master"
+	"SnakeGame/model/common"
 	pb "SnakeGame/model/proto"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"image/color"
 )
 
+const CellSize = 20
+
 // handleKeyInput обработка клавиш
-func handleKeyInput(e *fyne.KeyEvent, masterNode *master.Master) {
+func handleKeyInput(e *fyne.KeyEvent, node *common.Node) {
 	var newDirection pb.Direction
 
 	switch e.Name {
@@ -25,11 +27,11 @@ func handleKeyInput(e *fyne.KeyEvent, masterNode *master.Master) {
 		return
 	}
 
-	masterNode.Node.Mu.Lock()
-	defer masterNode.Node.Mu.Unlock()
+	node.Mu.Lock()
+	defer node.Mu.Unlock()
 
-	for _, snake := range masterNode.Node.State.Snakes {
-		if snake.GetPlayerId() == masterNode.Node.PlayerInfo.GetId() {
+	for _, snake := range node.State.Snakes {
+		if snake.GetPlayerId() == node.PlayerInfo.GetId() {
 			currentDirection := snake.GetHeadDirection()
 			// проверка направления
 			isOppositeDirection := func(cur, new pb.Direction) bool {

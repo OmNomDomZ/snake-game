@@ -2,7 +2,9 @@ package ui
 
 import (
 	"SnakeGame/connection"
+	"SnakeGame/model/common"
 	"SnakeGame/model/master"
+	"SnakeGame/model/player"
 	pb "SnakeGame/model/proto"
 	"fmt"
 	"fyne.io/fyne/v2"
@@ -11,13 +13,12 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 	"google.golang.org/protobuf/proto"
+	"log"
 	"math/rand"
 	"net"
 	"strconv"
 	"time"
 )
-
-const CellSize = 20
 
 var gameTicker *time.Ticker
 var isRunning bool
@@ -31,6 +32,10 @@ func ShowMainMenu(w fyne.Window, multConn *net.UDPConn) {
 		ShowGameConfig(w, multConn)
 	})
 
+	joinGameButton := widget.NewButton("Присоединиться к игре", func() {
+		ShowJoinGame(w, multConn)
+	})
+
 	exitButton := widget.NewButton("Выход", func() {
 		w.Close()
 	})
@@ -38,6 +43,7 @@ func ShowMainMenu(w fyne.Window, multConn *net.UDPConn) {
 	content := container.NewVBox(
 		title,
 		newGameButton,
+		joinGameButton,
 		exitButton,
 	)
 
@@ -68,7 +74,7 @@ func ShowGameConfig(w fyne.Window, multConn *net.UDPConn) {
 			StateDelayMs: proto.Int32(int32(delay)),
 		}
 
-		ShowGameScreen(w, config, multConn)
+		ShowMasterGameScreen(w, config, multConn)
 	})
 
 	backButton := widget.NewButton("Назад", func() {
@@ -94,8 +100,8 @@ func ShowGameConfig(w fyne.Window, multConn *net.UDPConn) {
 	w.SetContent(container.NewCenter(content))
 }
 
-// ShowGameScreen показывает экран игры
-func ShowGameScreen(w fyne.Window, config *pb.GameConfig, multConn *net.UDPConn) {
+// ShowMasterGameScreen показывает экран игры
+func ShowMasterGameScreen(w fyne.Window, config *pb.GameConfig, multConn *net.UDPConn) {
 	masterNode := master.NewMaster(multConn, config)
 	go masterNode.Start()
 
@@ -115,9 +121,126 @@ func ShowGameScreen(w fyne.Window, config *pb.GameConfig, multConn *net.UDPConn)
 
 	w.SetContent(splitContent)
 
-	StartGameLoop(w, masterNode, gameContent, scoreTable, foodCountLabel, func(score int32) {
+	StartGameLoop(w, masterNode.Node, gameContent, scoreTable, foodCountLabel, func(score int32) {
 		scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
 	})
+}
+
+// ShowJoinGame отображает экран присоединения к игре
+func ShowJoinGame(w fyne.Window, multConn *net.UDPConn) {
+	log.Printf("присоединение...")
+	playerNode := player.NewPlayer(multConn)
+	go playerNode.ReceiveMulticastMessages()
+
+	discoveryLabel := widget.NewLabel("Поиск доступных игр...")
+	discoveryLabel.Alignment = fyne.TextAlignCenter
+
+	gameList := widget.NewSelect([]string{}, func(value string) {
+		// Здесь можно обработать выбор игры (при необходимости)
+		log.Printf("Selected game: %s", value)
+	})
+	gameList.PlaceHolder = "Выберите игру"
+	gameList.Resize(fyne.NewSize(300, 50))
+
+	//gameList := widget.NewList(
+	//	func() int { return 0 },
+	//	func() fyne.CanvasObject {
+	//		return widget.NewLabel("Loading...")
+	//	},
+	//	func(i widget.ListItemID, o fyne.CanvasObject) {
+	//		o.(*widget.Label).SetText("Loading...")
+	//	},
+	//)
+
+	playerNameEntry := widget.NewEntry()
+	playerNameEntry.SetPlaceHolder("Введите ваше имя")
+
+	joinButton := widget.NewButton("Присоединиться", func() {
+		playerName := playerNameEntry.Text
+		if playerName == "" {
+			dialog := widget.NewLabel("Имя игрока не может быть пустым.")
+			w.SetContent(container.NewCenter(dialog))
+			return
+		}
+		// получаем выбранную игру из списка
+		selectedGame := getSelectedGame(playerNode, gameList)
+		if selectedGame != nil {
+			ShowPlayerGameScreen(w, playerNode, playerName, selectedGame, multConn)
+		}
+	})
+
+	backButton := widget.NewButton("Назад", func() {
+		ShowMainMenu(w, multConn)
+	})
+
+	content := container.NewVBox(
+		discoveryLabel,
+		gameList,
+		widget.NewForm(
+			&widget.FormItem{Text: "Имя игрока", Widget: playerNameEntry},
+		),
+		joinButton,
+		backButton,
+	)
+
+	w.SetContent(container.NewCenter(content))
+
+	// Реализуем обнаружение игр и обновление списка
+	go func() {
+		games := playerNode.DiscoveredGames
+		gameList.Options = getGameNames(games)
+		gameList.Refresh()
+		discoveryLabel.SetText("Выберите игру из списка")
+	}()
+}
+
+func getGameNames(games []player.DiscoveredGame) []string {
+	names := make([]string, len(games))
+	for i, game := range games {
+		names[i] = game.GameName
+	}
+	return names
+}
+
+func getSelectedGame(playerNode *player.Player, gameList *widget.Select) *player.DiscoveredGame {
+	for _, game := range playerNode.DiscoveredGames {
+		if gameList.Selected == game.GameName {
+			return &game
+		}
+	}
+	log.Printf("Could't find selected game")
+	return nil
+}
+
+// ShowPlayerGameScreen инициализирует игрока и запускает UI игры
+func ShowPlayerGameScreen(w fyne.Window, playerNode *player.Player, playerName string,
+	selectedGame *player.DiscoveredGame, multConn *net.UDPConn) {
+
+	playerNode.Node.PlayerInfo.Name = proto.String(playerName)
+	playerNode.Node.Config = selectedGame.Config
+	playerNode.MasterAddr = selectedGame.MasterAddr
+	playerNode.AnnouncementMsg = selectedGame.AnnouncementMsg
+	playerNode.Start()
+
+	//gameContent := CreateGameContent(playerNode.Node.Config)
+	//
+	//scoreLabel := widget.NewLabel("Счет: 0")
+	//infoPanel, scoreTable, foodCountLabel := createInfoPanel(playerNode.Node.Config, func() {
+	//	StopGameLoop()
+	//	ShowMainMenu(w, multConn)
+	//}, scoreLabel)
+	//
+	//splitContent := container.NewHSplit(
+	//	gameContent,
+	//	infoPanel,
+	//)
+	//splitContent.SetOffset(0.7)
+	//
+	//w.SetContent(splitContent)
+	//
+	//StartGameLoop(w, playerNode.Node, gameContent, scoreTable, foodCountLabel, func(score int32) {
+	//	scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
+	//})
 }
 
 // CreateGameContent создает холст
@@ -132,7 +255,7 @@ func CreateGameContent(config *pb.GameConfig) *fyne.Container {
 }
 
 // StartGameLoop главный цикл игры
-func StartGameLoop(w fyne.Window, masterNode *master.Master, gameContent *fyne.Container,
+func StartGameLoop(w fyne.Window, node *common.Node, gameContent *fyne.Container,
 	scoreTable *widget.Table, foodCountLabel *widget.Label, updateScore func(int32)) {
 	rand.NewSource(time.Now().UnixNano())
 
@@ -142,23 +265,28 @@ func StartGameLoop(w fyne.Window, masterNode *master.Master, gameContent *fyne.C
 
 	// обработка клавиш
 	w.Canvas().SetOnTypedKey(func(e *fyne.KeyEvent) {
-		handleKeyInput(e, masterNode)
+		handleKeyInput(e, node)
 	})
+
+	if node.State == nil {
+		node.Mu.Lock()
+		for node.State == nil {
+			node.Cond.Wait()
+		}
+		node.Mu.Unlock()
+	}
 
 	go func() {
 		for isRunning {
 			select {
 			case <-gameTicker.C:
-				masterNode.Node.Mu.Lock()
-				// обновления состояния игры
-				//masterNode.GenerateFood()
-				//masterNode.UpdateGameState()
-				stateCopy := proto.Clone(masterNode.Node.State).(*pb.GameState)
-				configCopy := proto.Clone(masterNode.Node.Config).(*pb.GameConfig)
-				// обновление счета
+				node.Mu.Lock()
+				stateCopy := proto.Clone(node.State).(*pb.GameState)
+				configCopy := proto.Clone(node.Config).(*pb.GameConfig)
+				// Обновление счёта
 				var playerScore int32
-				for _, player := range masterNode.Node.State.GetPlayers().GetPlayers() {
-					if player.GetId() == masterNode.Node.PlayerInfo.GetId() {
+				for _, player := range node.State.GetPlayers().GetPlayers() {
+					if player.GetId() == node.PlayerInfo.GetId() {
 						playerScore = player.GetScore()
 						break
 					}
@@ -166,10 +294,11 @@ func StartGameLoop(w fyne.Window, masterNode *master.Master, gameContent *fyne.C
 				updateScore(playerScore)
 				renderGameState(gameContent, stateCopy, configCopy)
 				updateInfoPanel(scoreTable, foodCountLabel, stateCopy)
-				masterNode.Node.Mu.Unlock()
+				node.Mu.Unlock()
 			}
 		}
 	}()
+
 }
 
 // StopGameLoop остановка игры
@@ -227,8 +356,8 @@ func updateInfoPanel(scoreTable *widget.Table, foodCountLabel *widget.Label, sta
 	data := [][]string{
 		{"Name", "Score"},
 	}
-	for _, player := range state.GetPlayers().GetPlayers() {
-		data = append(data, []string{player.GetName(), fmt.Sprintf("%d", player.GetScore())})
+	for _, gamePlayer := range state.GetPlayers().GetPlayers() {
+		data = append(data, []string{gamePlayer.GetName(), fmt.Sprintf("%d", gamePlayer.GetScore())})
 	}
 
 	// обновляем таблицу счета
