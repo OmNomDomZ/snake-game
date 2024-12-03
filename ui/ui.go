@@ -136,7 +136,6 @@ func ShowJoinGame(w fyne.Window, multConn *net.UDPConn) {
 	discoveryLabel.Alignment = fyne.TextAlignCenter
 
 	gameList := widget.NewSelect([]string{}, func(value string) {
-		// Здесь можно обработать выбор игры (при необходимости)
 		log.Printf("Selected game: %s", value)
 	})
 	gameList.PlaceHolder = "Выберите игру"
@@ -274,9 +273,9 @@ func StartGameLoopForMaster(w fyne.Window, node *common.Node, gameContent *fyne.
 				configCopy := proto.Clone(node.Config).(*pb.GameConfig)
 				// Обновление счёта
 				var playerScore int32
-				for _, player := range node.State.GetPlayers().GetPlayers() {
-					if player.GetId() == node.PlayerInfo.GetId() {
-						playerScore = player.GetScore()
+				for _, gamePlayer := range node.State.GetPlayers().GetPlayers() {
+					if gamePlayer.GetId() == node.PlayerInfo.GetId() {
+						playerScore = gamePlayer.GetScore()
 						break
 					}
 				}
@@ -321,9 +320,9 @@ func StartGameLoopForPLayer(w fyne.Window, playerNode *player.Player, gameConten
 				configCopy := proto.Clone(playerNode.Node.Config).(*pb.GameConfig)
 				// Обновление счёта
 				var playerScore int32
-				for _, player := range playerNode.Node.State.GetPlayers().GetPlayers() {
-					if player.GetId() == playerNode.Node.PlayerInfo.GetId() {
-						playerScore = player.GetScore()
+				for _, gamePlayer := range playerNode.Node.State.GetPlayers().GetPlayers() {
+					if gamePlayer.GetId() == playerNode.Node.PlayerInfo.GetId() {
+						playerScore = gamePlayer.GetScore()
 						break
 					}
 				}
@@ -367,7 +366,7 @@ func createInfoPanel(config *pb.GameConfig, onExit func(), scoreLabel *widget.La
 	scoreTable.SetColumnWidth(1, 50)
 
 	scrollableTable := container.NewScroll(scoreTable)
-	scrollableTable.SetMinSize(fyne.NewSize(150, 100))
+	scrollableTable.SetMinSize(fyne.NewSize(150, 300))
 
 	gameInfo := widget.NewLabel(fmt.Sprintf("Текущая игра:\n\nРазмер: %dx%d\n", config.GetWidth(), config.GetHeight()))
 	foodCountLabel := widget.NewLabel("Еда: 0")
@@ -393,7 +392,14 @@ func updateInfoPanel(scoreTable *widget.Table, foodCountLabel *widget.Label, sta
 		{"Name", "Score"},
 	}
 	for _, gamePlayer := range state.GetPlayers().GetPlayers() {
-		data = append(data, []string{gamePlayer.GetName(), fmt.Sprintf("%d", gamePlayer.GetScore())})
+		playerName := gamePlayer.GetName()
+		if gamePlayer.GetRole() == pb.NodeRole_MASTER {
+			playerName += " 👑"
+		}
+		if gamePlayer.GetRole() == pb.NodeRole_DEPUTY {
+			playerName += " 🤡"
+		}
+		data = append(data, []string{playerName, fmt.Sprintf("%d", gamePlayer.GetScore())})
 	}
 
 	// обновляем таблицу счета
