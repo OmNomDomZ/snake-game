@@ -259,22 +259,18 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Join:
 		// проверяем есть ли место 5*5 для новой змеи
-		if !m.announcement.GetCanJoin() {
+		hasSquare, coord := m.hasFreeSquare(m.Node.State, m.Node.Config, 5)
+
+		if !hasSquare {
+			m.announcement.CanJoin = proto.Bool(false)
+			m.handleErrorMsg(addr)
 			log.Printf("Player cannot join: no available space")
-			errorMsg := &pb.GameMessage{
-				Type: &pb.GameMessage_Error{
-					Error: &pb.GameMessage_ErrorMsg{
-						ErrorMessage: proto.String("Cannot join: no available space"),
-					},
-				},
-			}
-			m.Node.SendMessage(errorMsg, addr)
 			//m.Node.SendAck(msg, addr)
 		} else {
 			// обрабатываем joinMsg
 			log.Printf("Join msg")
 			joinMsg := t.Join
-			m.handleJoinMessage(joinMsg, addr)
+			m.handleJoinMessage(joinMsg, addr, coord)
 		}
 
 	case *pb.GameMessage_Discover:

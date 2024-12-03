@@ -208,3 +208,40 @@ func (m *Master) killSnake(crashedPlayerId, killer int32) {
 		}
 	}
 }
+
+func (m *Master) hasFreeSquare(state *pb.GameState, config *pb.GameConfig, squareSize int32) (bool, *pb.GameState_Coord) {
+	occupied := make([][]bool, config.GetWidth())
+	for i := range occupied {
+		occupied[i] = make([]bool, config.GetHeight())
+	}
+
+	for _, snake := range state.Snakes {
+		for _, point := range snake.Points {
+			x, y := point.GetX(), point.GetY()
+			if x >= 0 && x < config.GetWidth() && y >= 0 && y < config.GetHeight() {
+				occupied[x][y] = true
+			}
+		}
+	}
+
+	for startX := int32(0); startX <= config.GetWidth()-squareSize; startX++ {
+		for startY := int32(0); startY <= config.GetHeight()-squareSize; startY++ {
+			if isSquareFree(occupied, startX, startY, squareSize) {
+				return true, &pb.GameState_Coord{X: proto.Int32(startX), Y: proto.Int32(startY)}
+			}
+		}
+	}
+
+	return false, nil
+}
+
+func isSquareFree(occupied [][]bool, startX, startY, squareSize int32) bool {
+	for x := startX; x < startX+squareSize; x++ {
+		for y := startY; y < startY+squareSize; y++ {
+			if occupied[x][y] {
+				return false
+			}
+		}
+	}
+	return true
+}

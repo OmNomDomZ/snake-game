@@ -8,7 +8,18 @@ import (
 	"net"
 )
 
-func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UDPAddr) {
+func (m *Master) handleErrorMsg(addr *net.UDPAddr) {
+	errorMsg := &pb.GameMessage{
+		Type: &pb.GameMessage_Error{
+			Error: &pb.GameMessage_ErrorMsg{
+				ErrorMessage: proto.String("Cannot join: no available space"),
+			},
+		},
+	}
+	m.Node.SendMessage(errorMsg, addr)
+}
+
+func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UDPAddr, coord *pb.GameState_Coord) {
 	newPlayerID := int32(len(m.players.Players) + 1)
 	newPlayer := &pb.GamePlayer{
 		Name:      proto.String(joinMsg.GetPlayerName()),
@@ -32,7 +43,7 @@ func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UD
 	}
 	m.Node.SendMessage(ackMsg, addr)
 
-	m.addSnakeForNewPlayer(newPlayerID)
+	m.addSnakeForNewPlayer(newPlayerID, coord)
 
 	m.checkAndAssignDeputy()
 }
@@ -61,13 +72,13 @@ func (m *Master) hasDeputy() bool {
 	return false
 }
 
-func (m *Master) addSnakeForNewPlayer(playerID int32) {
+func (m *Master) addSnakeForNewPlayer(playerID int32, coord *pb.GameState_Coord) {
 	newSnake := &pb.GameState_Snake{
 		PlayerId: proto.Int32(playerID),
 		Points: []*pb.GameState_Coord{
 			{
-				X: proto.Int32(m.Node.Config.GetWidth() / 2),
-				Y: proto.Int32(m.Node.Config.GetHeight() / 2),
+				X: proto.Int32(coord.GetX()),
+				Y: proto.Int32(coord.GetY()),
 			},
 		},
 		State:         pb.GameState_Snake_ALIVE.Enum(),
@@ -129,20 +140,6 @@ func (m *Master) handleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId 
 
 	snake.HeadDirection = newDirection.Enum()
 	log.Printf("Player ID: %d changed direction to: %v", playerId, newDirection)
-}
-
-func (m *Master) sendJoinAck(msg *pb.GameMessage, addr *net.UDPAddr) {
-	ackMsg := &pb.GameMessage{
-		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
-		SenderId:   proto.Int32(m.Node.PlayerInfo.GetId()),
-		ReceiverId: proto.Int32(2),
-		Type: &pb.GameMessage_Ack{
-			Ack: &pb.GameMessage_AckMsg{},
-		},
-	}
-
-	m.Node.SendMessage(ackMsg, addr)
-	log.Printf("Sent AckJoinMsg to %v", addr)
 }
 
 // обработка отвалившихся узлов
