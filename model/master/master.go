@@ -244,6 +244,10 @@ func (m *Master) receiveMessages() {
 			continue
 		}
 
+		if m.Node.PlayerInfo.GetIpAddress() == addr.IP.String() && m.Node.PlayerInfo.GetPort() == int32(addr.Port) {
+			log.Printf("Get msg from itself")
+			continue
+		}
 		log.Printf("Master: Received message: %v from %v", msg.String(), addr)
 		m.handleMessage(&msg, addr)
 	}

@@ -2,16 +2,18 @@ package ui
 
 import (
 	"SnakeGame/model/common"
+	"SnakeGame/model/player"
 	pb "SnakeGame/model/proto"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"google.golang.org/protobuf/proto"
 	"image/color"
 )
 
 const CellSize = 20
 
 // handleKeyInput обработка клавиш
-func handleKeyInput(e *fyne.KeyEvent, node *common.Node) {
+func handleKeyInputForMaster(e *fyne.KeyEvent, node *common.Node) {
 	var newDirection pb.Direction
 
 	switch e.Name {
@@ -54,6 +56,62 @@ func handleKeyInput(e *fyne.KeyEvent, node *common.Node) {
 			break
 		}
 	}
+}
+
+func handleKeyInputForPlayer(e *fyne.KeyEvent, playerNode *player.Player) {
+	var newDirection pb.Direction
+
+	switch e.Name {
+	case fyne.KeyW, fyne.KeyUp:
+		newDirection = pb.Direction_UP
+	case fyne.KeyS, fyne.KeyDown:
+		newDirection = pb.Direction_DOWN
+	case fyne.KeyA, fyne.KeyLeft:
+		newDirection = pb.Direction_LEFT
+	case fyne.KeyD, fyne.KeyRight:
+		newDirection = pb.Direction_RIGHT
+	default:
+		return
+	}
+
+	playerNode.Node.Mu.Lock()
+	defer playerNode.Node.Mu.Unlock()
+
+	steerMsg := &pb.GameMessage{
+		MsgSeq: proto.Int64(playerNode.Node.MsgSeq),
+		Type: &pb.GameMessage_Steer{
+			Steer: &pb.GameMessage_SteerMsg{
+				Direction: newDirection.Enum(),
+			},
+		},
+	}
+
+	playerNode.Node.SendMessage(steerMsg, playerNode.MasterAddr)
+
+	//for _, snake := range node.State.Snakes {
+	//	if snake.GetPlayerId() == node.PlayerInfo.GetId() {
+	//		currentDirection := snake.GetHeadDirection()
+	//		// проверка направления
+	//		isOppositeDirection := func(cur, new pb.Direction) bool {
+	//			switch cur {
+	//			case pb.Direction_UP:
+	//				return new == pb.Direction_DOWN
+	//			case pb.Direction_DOWN:
+	//				return new == pb.Direction_UP
+	//			case pb.Direction_LEFT:
+	//				return new == pb.Direction_RIGHT
+	//			case pb.Direction_RIGHT:
+	//				return new == pb.Direction_LEFT
+	//			}
+	//			return false
+	//		}(currentDirection, newDirection)
+	//
+	//		if !isOppositeDirection {
+	//			snake.HeadDirection = newDirection.Enum()
+	//		}
+	//		break
+	//	}
+	//}
 }
 
 // renderGameState выводит игру на экран

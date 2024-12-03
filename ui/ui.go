@@ -121,7 +121,7 @@ func ShowMasterGameScreen(w fyne.Window, config *pb.GameConfig, multConn *net.UD
 
 	w.SetContent(splitContent)
 
-	StartGameLoop(w, masterNode.Node, gameContent, scoreTable, foodCountLabel, func(score int32) {
+	StartGameLoopForMaster(w, masterNode.Node, gameContent, scoreTable, foodCountLabel, func(score int32) {
 		scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
 	})
 }
@@ -228,7 +228,7 @@ func ShowPlayerGameScreen(w fyne.Window, playerNode *player.Player, playerName s
 
 	w.SetContent(splitContent)
 
-	StartGameLoop(w, playerNode.Node, gameContent, scoreTable, foodCountLabel, func(score int32) {
+	StartGameLoopForPLayer(w, playerNode, gameContent, scoreTable, foodCountLabel, func(score int32) {
 		scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
 	})
 }
@@ -244,8 +244,7 @@ func CreateGameContent(config *pb.GameConfig) *fyne.Container {
 	return gameContent
 }
 
-// StartGameLoop главный цикл игры
-func StartGameLoop(w fyne.Window, node *common.Node, gameContent *fyne.Container,
+func StartGameLoopForMaster(w fyne.Window, node *common.Node, gameContent *fyne.Container,
 	scoreTable *widget.Table, foodCountLabel *widget.Label, updateScore func(int32)) {
 	rand.NewSource(time.Now().UnixNano())
 
@@ -255,7 +254,7 @@ func StartGameLoop(w fyne.Window, node *common.Node, gameContent *fyne.Container
 
 	// обработка клавиш
 	w.Canvas().SetOnTypedKey(func(e *fyne.KeyEvent) {
-		handleKeyInput(e, node)
+		handleKeyInputForMaster(e, node)
 	})
 
 	if node.State == nil {
@@ -285,6 +284,53 @@ func StartGameLoop(w fyne.Window, node *common.Node, gameContent *fyne.Container
 				renderGameState(gameContent, stateCopy, configCopy)
 				updateInfoPanel(scoreTable, foodCountLabel, stateCopy)
 				node.Mu.Unlock()
+			}
+		}
+	}()
+
+}
+
+// StartGameLoop главный цикл игры
+func StartGameLoopForPLayer(w fyne.Window, playerNode *player.Player, gameContent *fyne.Container,
+	scoreTable *widget.Table, foodCountLabel *widget.Label, updateScore func(int32)) {
+	rand.NewSource(time.Now().UnixNano())
+
+	gameTicker = time.NewTicker(time.Millisecond * 60)
+
+	isRunning = true
+
+	// обработка клавиш
+	w.Canvas().SetOnTypedKey(func(e *fyne.KeyEvent) {
+		handleKeyInputForPlayer(e, playerNode)
+	})
+
+	if playerNode.Node.State == nil {
+		playerNode.Node.Mu.Lock()
+		for playerNode.Node.State == nil {
+			playerNode.Node.Cond.Wait()
+		}
+		playerNode.Node.Mu.Unlock()
+	}
+
+	go func() {
+		for isRunning {
+			select {
+			case <-gameTicker.C:
+				playerNode.Node.Mu.Lock()
+				stateCopy := proto.Clone(playerNode.Node.State).(*pb.GameState)
+				configCopy := proto.Clone(playerNode.Node.Config).(*pb.GameConfig)
+				// Обновление счёта
+				var playerScore int32
+				for _, player := range playerNode.Node.State.GetPlayers().GetPlayers() {
+					if player.GetId() == playerNode.Node.PlayerInfo.GetId() {
+						playerScore = player.GetScore()
+						break
+					}
+				}
+				updateScore(playerScore)
+				renderGameState(gameContent, stateCopy, configCopy)
+				updateInfoPanel(scoreTable, foodCountLabel, stateCopy)
+				playerNode.Node.Mu.Unlock()
 			}
 		}
 	}()

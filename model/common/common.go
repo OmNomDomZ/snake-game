@@ -99,9 +99,9 @@ func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPC
 
 // SendMessage отправка сообщения и добавление его в неподтверждённые
 func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
-	if n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port) {
-		return
-	}
+	//if n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port) {
+	//	return
+	//}
 
 	// увеличиваем порядковый номер сообщения
 	//n.Mu.Lock()
