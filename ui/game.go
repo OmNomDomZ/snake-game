@@ -1,118 +1,13 @@
 package ui
 
 import (
-	"SnakeGame/model/common"
-	"SnakeGame/model/player"
 	pb "SnakeGame/model/proto"
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
-	"google.golang.org/protobuf/proto"
 	"image/color"
 )
 
 const CellSize = 20
-
-// handleKeyInput обработка клавиш
-func handleKeyInputForMaster(e *fyne.KeyEvent, node *common.Node) {
-	var newDirection pb.Direction
-
-	switch e.Name {
-	case fyne.KeyW, fyne.KeyUp:
-		newDirection = pb.Direction_UP
-	case fyne.KeyS, fyne.KeyDown:
-		newDirection = pb.Direction_DOWN
-	case fyne.KeyA, fyne.KeyLeft:
-		newDirection = pb.Direction_LEFT
-	case fyne.KeyD, fyne.KeyRight:
-		newDirection = pb.Direction_RIGHT
-	default:
-		return
-	}
-
-	node.Mu.Lock()
-	defer node.Mu.Unlock()
-
-	for _, snake := range node.State.Snakes {
-		if snake.GetPlayerId() == node.PlayerInfo.GetId() {
-			currentDirection := snake.GetHeadDirection()
-			// проверка направления
-			isOppositeDirection := func(cur, new pb.Direction) bool {
-				switch cur {
-				case pb.Direction_UP:
-					return new == pb.Direction_DOWN
-				case pb.Direction_DOWN:
-					return new == pb.Direction_UP
-				case pb.Direction_LEFT:
-					return new == pb.Direction_RIGHT
-				case pb.Direction_RIGHT:
-					return new == pb.Direction_LEFT
-				}
-				return false
-			}(currentDirection, newDirection)
-
-			if !isOppositeDirection {
-				snake.HeadDirection = newDirection.Enum()
-			}
-			break
-		}
-	}
-}
-
-func handleKeyInputForPlayer(e *fyne.KeyEvent, playerNode *player.Player) {
-	var newDirection pb.Direction
-
-	switch e.Name {
-	case fyne.KeyW, fyne.KeyUp:
-		newDirection = pb.Direction_UP
-	case fyne.KeyS, fyne.KeyDown:
-		newDirection = pb.Direction_DOWN
-	case fyne.KeyA, fyne.KeyLeft:
-		newDirection = pb.Direction_LEFT
-	case fyne.KeyD, fyne.KeyRight:
-		newDirection = pb.Direction_RIGHT
-	default:
-		return
-	}
-
-	playerNode.Node.Mu.Lock()
-	defer playerNode.Node.Mu.Unlock()
-
-	steerMsg := &pb.GameMessage{
-		MsgSeq: proto.Int64(playerNode.Node.MsgSeq),
-		Type: &pb.GameMessage_Steer{
-			Steer: &pb.GameMessage_SteerMsg{
-				Direction: newDirection.Enum(),
-			},
-		},
-	}
-
-	playerNode.Node.SendMessage(steerMsg, playerNode.MasterAddr)
-
-	//for _, snake := range node.State.Snakes {
-	//	if snake.GetPlayerId() == node.PlayerInfo.GetId() {
-	//		currentDirection := snake.GetHeadDirection()
-	//		// проверка направления
-	//		isOppositeDirection := func(cur, new pb.Direction) bool {
-	//			switch cur {
-	//			case pb.Direction_UP:
-	//				return new == pb.Direction_DOWN
-	//			case pb.Direction_DOWN:
-	//				return new == pb.Direction_UP
-	//			case pb.Direction_LEFT:
-	//				return new == pb.Direction_RIGHT
-	//			case pb.Direction_RIGHT:
-	//				return new == pb.Direction_LEFT
-	//			}
-	//			return false
-	//		}(currentDirection, newDirection)
-	//
-	//		if !isOppositeDirection {
-	//			snake.HeadDirection = newDirection.Enum()
-	//		}
-	//		break
-	//	}
-	//}
-}
 
 // renderGameState выводит игру на экран
 func renderGameState(content *fyne.Container, state *pb.GameState, config *pb.GameConfig) {
@@ -132,7 +27,7 @@ func renderGameState(content *fyne.Container, state *pb.GameState, config *pb.Ga
 
 	// еда
 	for _, food := range state.Foods {
-		apple := canvas.NewCircle(color.RGBA{255, 0, 0, 255})
+		apple := canvas.NewCircle(color.RGBA{255, 128, 0, 255})
 		apple.Resize(fyne.NewSize(CellSize, CellSize))
 		x := float32(food.GetX()) * CellSize
 		y := float32(food.GetY()) * CellSize
@@ -144,12 +39,27 @@ func renderGameState(content *fyne.Container, state *pb.GameState, config *pb.Ga
 	for _, snake := range state.Snakes {
 		for i, point := range snake.Points {
 			var rect *canvas.Rectangle
+			role := getUserById(snake.GetPlayerId(), state)
 			if i == 0 {
 				// голова
-				rect = canvas.NewRectangle(color.RGBA{0, 255, 0, 255})
+				switch role {
+				case pb.NodeRole_MASTER:
+					rect = canvas.NewRectangle(color.RGBA{255, 0, 0, 255})
+				case pb.NodeRole_NORMAL:
+					rect = canvas.NewRectangle(color.RGBA{0, 255, 0, 255})
+				case pb.NodeRole_DEPUTY:
+					rect = canvas.NewRectangle(color.RGBA{150, 90, 255, 255})
+				}
 			} else {
 				// тело
-				rect = canvas.NewRectangle(color.RGBA{0, 128, 0, 255})
+				switch role {
+				case pb.NodeRole_MASTER:
+					rect = canvas.NewRectangle(color.RGBA{128, 0, 0, 255})
+				case pb.NodeRole_NORMAL:
+					rect = canvas.NewRectangle(color.RGBA{0, 128, 0, 255})
+				case pb.NodeRole_DEPUTY:
+					rect = canvas.NewRectangle(color.RGBA{120, 60, 200, 255})
+				}
 			}
 			rect.Resize(fyne.NewSize(CellSize, CellSize))
 			x := float32(point.GetX()) * CellSize
@@ -160,4 +70,13 @@ func renderGameState(content *fyne.Container, state *pb.GameState, config *pb.Ga
 	}
 
 	content.Refresh()
+}
+
+func getUserById(id int32, state *pb.GameState) pb.NodeRole {
+	for _, player := range state.Players.Players {
+		if player.GetId() == id {
+			return player.GetRole()
+		}
+	}
+	return 0
 }
