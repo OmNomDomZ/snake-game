@@ -29,7 +29,7 @@ func NewMaster(multicastConn *net.UDPConn, config *pb.GameConfig) *Master {
 		log.Fatalf("Error creating unicast socket: %v", err)
 	}
 
-	masterIP, err := getLocalIP()
+	masterIP, err := common.GetLocalIP()
 	if err != nil {
 		log.Fatalf("Error getting local IP: %v", err)
 	}
@@ -88,44 +88,6 @@ func NewMaster(multicastConn *net.UDPConn, config *pb.GameConfig) *Master {
 	}
 }
 
-// для получения реального ip
-func getLocalIP() (string, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("error getting network interfaces: %w", err)
-	}
-
-	for _, iface := range interfaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-
-			// IPv4
-			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
-				continue
-			}
-
-			return ip.String(), nil
-		}
-	}
-
-	return "", fmt.Errorf("no connected network interface found")
-}
-
 //func NewDeputyMaster(node *common.Node, newMaster *pb.GamePlayer, lastStateMsg int64) *Master {
 //	newMaster.Role = pb.NodeRole_MASTER.Enum()
 //
@@ -159,10 +121,10 @@ func (m *Master) Start() {
 	go m.sendAnnouncementMessage()
 	go m.receiveMessages()
 	go m.receiveMulticastMessages()
-	//go m.checkTimeouts()
+	go m.checkTimeouts()
 	go m.sendStateMessage()
 	go m.Node.ResendUnconfirmedMessages(m.Node.Config.GetStateDelayMs())
-	//go m.Node.SendPings(m.Node.Config.GetStateDelayMs())
+	go m.Node.SendPings(m.Node.Config.GetStateDelayMs())
 }
 
 // отправка AnnouncementMsg
@@ -253,7 +215,9 @@ func (m *Master) receiveMessages() {
 
 // обработка юникаст сообщения
 func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
-	m.Node.LastInteraction[msg.GetSenderId()] = time.Now()
+	if msg.GetSenderId() > 0 {
+		m.Node.LastInteraction[msg.GetSenderId()] = time.Now()
+	}
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Join:
 		// проверяем есть ли место 5*5 для новой змеи
@@ -272,7 +236,6 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 
 	case *pb.GameMessage_Discover:
 		m.handleDiscoverMessage(addr)
-		log.Printf("Discover msg")
 
 	case *pb.GameMessage_Steer:
 		playerId := msg.GetSenderId()
@@ -287,19 +250,16 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		}
 
 	case *pb.GameMessage_RoleChange:
-		log.Printf("Role change msg")
 		m.handleRoleChangeMessage(msg, addr)
 		m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ping:
-		log.Printf("Ping msg")
 		m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ack:
 		m.Node.AckChan <- msg.GetMsgSeq()
 
 	case *pb.GameMessage_State:
-		log.Printf("State msg")
 		if t.State.GetState().GetStateOrder() <= m.lastStateMsg {
 			return
 		} else {

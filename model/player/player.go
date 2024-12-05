@@ -42,7 +42,7 @@ func NewPlayer(multicastConn *net.UDPConn) *Player {
 		log.Fatalf("Error creating unicast socket: %v", err)
 	}
 
-	playerIP, err := getLocalIP()
+	playerIP, err := common.GetLocalIP()
 	if err != nil {
 		log.Fatalf("Error getting local IP: %v", err)
 	}
@@ -77,7 +77,7 @@ func (p *Player) Start() {
 	p.discoverGames()
 	go p.receiveMessages()
 	go p.Node.ResendUnconfirmedMessages(p.Node.Config.GetStateDelayMs())
-	//go p.Node.SendPings(p.Node.Config.GetStateDelayMs())
+	go p.Node.SendPings(p.Node.Config.GetStateDelayMs())
 }
 
 func (p *Player) ReceiveMulticastMessages() {
@@ -98,44 +98,6 @@ func (p *Player) ReceiveMulticastMessages() {
 
 		p.handleMulticastMessage(&msg, addr)
 	}
-}
-
-// для получения реального ip
-func getLocalIP() (string, error) {
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		return "", fmt.Errorf("error getting network interfaces: %w", err)
-	}
-
-	for _, iface := range interfaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-
-		for _, addr := range addrs {
-			var ip net.IP
-			switch v := addr.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-
-			// IPv4
-			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
-				continue
-			}
-
-			return ip.String(), nil
-		}
-	}
-
-	return "", fmt.Errorf("no connected network interface found")
 }
 
 func (p *Player) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
@@ -197,11 +159,9 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		if !p.haveId {
 			p.Node.PlayerInfo.Id = proto.Int32(msg.GetReceiverId())
 			log.Printf("Joined game with ID: %d", p.Node.PlayerInfo.GetId())
-			p.Node.AckChan <- msg.GetMsgSeq()
 			p.haveId = true
-		} else {
-			p.Node.AckChan <- msg.GetMsgSeq()
 		}
+		p.Node.AckChan <- msg.GetMsgSeq()
 	case *pb.GameMessage_Announcement:
 		p.MasterAddr = addr
 		p.AnnouncementMsg = t.Announcement

@@ -64,6 +64,44 @@ func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPC
 	return node
 }
 
+// GetLocalIP получения реального ip
+func GetLocalIP() (string, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("error getting network interfaces: %w", err)
+	}
+
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			// IPv4
+			if ip == nil || ip.IsLoopback() || ip.To4() == nil {
+				continue
+			}
+
+			return ip.String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("no connected network interface found")
+}
+
 // SendAck любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
 func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
 	switch msg.Type.(type) {
@@ -114,21 +152,22 @@ func (n *Node) GetPlayerIdByAddress(addr *net.UDPAddr) int32 {
 }
 
 // SendPing отправка
-//func (n *Node) SendPing(addr *net.UDPAddr) {
-//	pingMsg := &pb.GameMessage{
-//		MsgSeq:   proto.Int64(n.MsgSeq),
-//		SenderId: proto.Int32(n.PlayerInfo.GetId()),
-//		Type: &pb.GameMessage_Ping{
-//			Ping: &pb.GameMessage_PingMsg{},
-//		},
-//	}
-//
-//	n.SendMessage(pingMsg, addr)
-//}
+func (n *Node) SendPing(addr *net.UDPAddr) {
+	pingMsg := &pb.GameMessage{
+		MsgSeq:   proto.Int64(n.MsgSeq),
+		SenderId: proto.Int32(n.PlayerInfo.GetId()),
+		Type: &pb.GameMessage_Ping{
+			Ping: &pb.GameMessage_PingMsg{},
+		},
+	}
+
+	n.SendMessage(pingMsg, addr)
+}
 
 // SendMessage отправка сообщения и добавление его в неподтверждённые
 func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	// увеличиваем порядковый номер сообщения
+	msg.SenderId = proto.Int32(n.PlayerInfo.GetId())
 	switch msg.Type.(type) {
 	case *pb.GameMessage_Ack:
 
@@ -162,16 +201,10 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		}
 	}
 
-	//ip := addr.IP
-	//port := addr.Port
-	//address := fmt.Sprintf("%s:%d", ip, port)
-	//n.LastSent[address] = time.Now()
-	//log.Printf("Sent message %v with Seq: %d to %v from %v", msg.Type, msg.GetMsgSeq(), addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
-
-	//if n.PlayerInfo.GetIpAddress() == addr.IP.String() &&
-	//	n.PlayerInfo.GetPort() == int32(addr.Port) {
-	//	n.LastSent[address] = time.Now()
-	//}
+	ip := addr.IP
+	port := addr.Port
+	address := fmt.Sprintf("%s:%d", ip, port)
+	n.LastSent[address] = time.Now()
 }
 
 // HandleAck обработка полученных AckMsg
@@ -218,33 +251,30 @@ func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
 }
 
 // SendPings отправка PingMsg, если не было отправлено сообщений в течение stateDelayMs/10
-//func (n *Node) SendPings(stateDelayMs int32) {
-//	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
-//	defer ticker.Stop()
-//
-//	for range ticker.C {
-//		now := time.Now()
-//		n.Mu.Lock()
-//		if n.State == nil {
-//			n.Mu.Unlock()
-//			return
-//		}
-//		for _, player := range n.State.Players.Players {
-//			if player.GetId() == n.PlayerInfo.GetId() {
-//				continue
-//			}
-//			addrKey := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
-//			last, exists := n.LastSent[addrKey]
-//			if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
-//				playerAddr, err := net.ResolveUDPAddr("udp", addrKey)
-//				if err != nil {
-//					log.Printf("Error resolving address for Ping: %v", err)
-//					continue
-//				}
-//				n.SendPing(playerAddr)
-//				n.LastSent[addrKey] = now
-//			}
-//		}
-//		n.Mu.Unlock()
-//	}
-//}
+func (n *Node) SendPings(stateDelayMs int32) {
+	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		now := time.Now()
+		if n.State == nil {
+			continue
+		}
+		for _, player := range n.State.Players.Players {
+			if player.GetId() == n.PlayerInfo.GetId() {
+				continue
+			}
+			addrKey := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
+			last, exists := n.LastSent[addrKey]
+			if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
+				playerAddr, err := net.ResolveUDPAddr("udp", addrKey)
+				if err != nil {
+					log.Printf("Error resolving address for Ping: %v", err)
+					continue
+				}
+				n.SendPing(playerAddr)
+				n.LastSent[addrKey] = now
+			}
+		}
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
+	"time"
 )
 
 func (m *Master) handleErrorMsg(addr *net.UDPAddr) {
@@ -143,27 +144,25 @@ func (m *Master) handleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId 
 }
 
 // обработка отвалившихся узлов
-//func (m *Master) checkTimeouts() {
-//	ticker := time.NewTicker(time.Duration(0.8*float64(m.Node.Config.GetStateDelayMs())) * time.Millisecond)
-//	defer ticker.Stop()
-//
-//	for range ticker.C {
-//		now := time.Now()
-//		m.Node.Mu.Lock()
-//		for playerId, lastInteraction := range m.Node.LastInteraction {
-//			if now.Sub(lastInteraction) > time.Duration(0.8*float64(m.Node.Config.GetStateDelayMs()))*time.Millisecond {
-//				log.Printf("player ID: %d has timeout", playerId)
-//				m.removePlayer(playerId)
-//			}
-//		}
-//		m.Node.Mu.Unlock()
-//	}
-//}
+func (m *Master) checkTimeouts() {
+	ticker := time.NewTicker(time.Duration(0.8*float64(m.Node.Config.GetStateDelayMs())) * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		now := time.Now()
+		for playerId, lastInteraction := range m.Node.LastInteraction {
+			if playerId == 0 {
+				continue
+			}
+			if now.Sub(lastInteraction) > time.Duration(0.8*float64(m.Node.Config.GetStateDelayMs()))*time.Millisecond {
+				log.Printf("player ID: %d has timeout", playerId)
+				m.removePlayer(playerId)
+			}
+		}
+	}
+}
 
 func (m *Master) removePlayer(playerId int32) {
-	m.Node.Mu.Lock()
-	defer m.Node.Mu.Unlock()
-
 	delete(m.Node.LastInteraction, playerId)
 
 	var removedPlayer *pb.GamePlayer
