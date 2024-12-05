@@ -22,7 +22,7 @@ func ShowGameConfig(w fyne.Window, multConn *net.UDPConn) {
 	heightEntry := widget.NewEntry()
 	heightEntry.SetText("25")
 	foodEntry := widget.NewEntry()
-	foodEntry.SetText("5")
+	foodEntry.SetText("10")
 	delayEntry := widget.NewEntry()
 	delayEntry.SetText("180")
 
