@@ -102,10 +102,12 @@ func ShowPlayerGameScreen(w fyne.Window, playerNode *player.Player, playerName s
 	gameContent := CreateGameContent(playerNode.Node.Config)
 
 	scoreLabel := widget.NewLabel("Счет: 0")
+	nameLabel := widget.NewLabel("Имя: ")
+	roleLabel := widget.NewLabel("Роль: ")
 	infoPanel, scoreTable, foodCountLabel := createInfoPanel(playerNode.Node.Config, func() {
 		StopGameLoop()
 		ShowMainMenu(w, multConn)
-	}, scoreLabel)
+	}, scoreLabel, nameLabel, roleLabel)
 
 	splitContent := container.NewHSplit(
 		gameContent,
@@ -115,14 +117,16 @@ func ShowPlayerGameScreen(w fyne.Window, playerNode *player.Player, playerName s
 
 	w.SetContent(splitContent)
 
-	StartGameLoopForPlayer(w, playerNode, gameContent, scoreTable, foodCountLabel, func(score int32) {
-		scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
-	})
+	StartGameLoopForPlayer(w, playerNode, gameContent, scoreTable, foodCountLabel,
+		func(score int32) { scoreLabel.SetText(fmt.Sprintf("Счет: %d", score)) },
+		func(name string) { nameLabel.SetText(fmt.Sprintf("Имя: %v", name)) },
+		func(role pb.NodeRole) { roleLabel.SetText(fmt.Sprintf("Роль: %v", role)) },
+	)
 }
 
 // StartGameLoop главный цикл игры
 func StartGameLoopForPlayer(w fyne.Window, playerNode *player.Player, gameContent *fyne.Container,
-	scoreTable *widget.Table, foodCountLabel *widget.Label, updateScore func(int32)) {
+	scoreTable *widget.Table, foodCountLabel *widget.Label, updateScore func(int32), updateName func(string), updateRole func(pb.NodeRole)) {
 	rand.NewSource(time.Now().UnixNano())
 
 	gameTicker = time.NewTicker(time.Millisecond * 60)
@@ -158,6 +162,8 @@ func StartGameLoopForPlayer(w fyne.Window, playerNode *player.Player, gameConten
 					}
 				}
 				updateScore(playerScore)
+				updateName(playerNode.Node.PlayerInfo.GetName())
+				updateRole(playerNode.Node.PlayerInfo.GetRole())
 				renderGameState(gameContent, stateCopy, configCopy)
 				updateInfoPanel(scoreTable, foodCountLabel, stateCopy)
 				playerNode.Node.Mu.Unlock()

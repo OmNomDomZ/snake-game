@@ -63,7 +63,7 @@ func StopGameLoop() {
 }
 
 // createInfoPanel информационная панель
-func createInfoPanel(config *pb.GameConfig, onExit func(), scoreLabel *widget.Label) (*fyne.Container, *widget.Table, *widget.Label) {
+func createInfoPanel(config *pb.GameConfig, onExit func(), scoreLabel *widget.Label, nameLabel *widget.Label, roleLabel *widget.Label) (*fyne.Container, *widget.Table, *widget.Label) {
 	data := [][]string{
 		{"Name", "Score"},
 	}
@@ -94,6 +94,8 @@ func createInfoPanel(config *pb.GameConfig, onExit func(), scoreLabel *widget.La
 
 	content := container.NewVBox(
 		container.New(layout.NewPaddedLayout(), scoreLabel),
+		container.New(layout.NewPaddedLayout(), nameLabel),
+		container.New(layout.NewPaddedLayout(), roleLabel),
 		container.New(layout.NewPaddedLayout(), scrollableTable),
 		container.New(layout.NewPaddedLayout(), gameInfo),
 		container.New(layout.NewPaddedLayout(), foodCountLabel),

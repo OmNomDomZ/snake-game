@@ -18,9 +18,9 @@ import (
 // ShowGameConfig настройки игры
 func ShowGameConfig(w fyne.Window, multConn *net.UDPConn) {
 	widthEntry := widget.NewEntry()
-	widthEntry.SetText("15")
+	widthEntry.SetText("25")
 	heightEntry := widget.NewEntry()
-	heightEntry.SetText("15")
+	heightEntry.SetText("25")
 	foodEntry := widget.NewEntry()
 	foodEntry.SetText("5")
 	delayEntry := widget.NewEntry()
@@ -73,10 +73,12 @@ func ShowMasterGameScreen(w fyne.Window, config *pb.GameConfig, multConn *net.UD
 	gameContent := CreateGameContent(config)
 
 	scoreLabel := widget.NewLabel("Счет: 0")
+	nameLabel := widget.NewLabel("Имя: ")
+	roleLabel := widget.NewLabel("Роль: ")
 	infoPanel, scoreTable, foodCountLabel := createInfoPanel(config, func() {
 		StopGameLoop()
 		ShowMainMenu(w, multConn)
-	}, scoreLabel)
+	}, scoreLabel, nameLabel, roleLabel)
 
 	splitContent := container.NewHSplit(
 		gameContent,
@@ -86,13 +88,15 @@ func ShowMasterGameScreen(w fyne.Window, config *pb.GameConfig, multConn *net.UD
 
 	w.SetContent(splitContent)
 
-	StartGameLoopForMaster(w, masterNode.Node, gameContent, scoreTable, foodCountLabel, func(score int32) {
-		scoreLabel.SetText(fmt.Sprintf("Счет: %d", score))
-	})
+	StartGameLoopForMaster(w, masterNode.Node, gameContent, scoreTable, foodCountLabel,
+		func(score int32) { scoreLabel.SetText(fmt.Sprintf("Счет: %d", score)) },
+		func(name string) { nameLabel.SetText(fmt.Sprintf("Имя: %v", name)) },
+		func(role pb.NodeRole) { roleLabel.SetText(fmt.Sprintf("Роль: %v", role)) },
+	)
 }
 
 func StartGameLoopForMaster(w fyne.Window, node *common.Node, gameContent *fyne.Container,
-	scoreTable *widget.Table, foodCountLabel *widget.Label, updateScore func(int32)) {
+	scoreTable *widget.Table, foodCountLabel *widget.Label, updateScore func(int32), updateName func(string), updateRole func(pb.NodeRole)) {
 	rand.NewSource(time.Now().UnixNano())
 
 	gameTicker = time.NewTicker(time.Millisecond * 60)
@@ -128,6 +132,8 @@ func StartGameLoopForMaster(w fyne.Window, node *common.Node, gameContent *fyne.
 					}
 				}
 				updateScore(playerScore)
+				updateName(node.PlayerInfo.GetName())
+				updateRole(node.PlayerInfo.GetRole())
 				renderGameState(gameContent, stateCopy, configCopy)
 				updateInfoPanel(scoreTable, foodCountLabel, stateCopy)
 				node.Mu.Unlock()
