@@ -42,10 +42,10 @@ func (m *Master) handleJoinMessage(msgSeq int64, joinMsg *pb.GameMessage_JoinMsg
 		},
 	}
 	m.Node.SendMessage(ackMsg, addr)
-
 	m.addSnakeForNewPlayer(newPlayerID, coord)
-
 	m.checkAndAssignDeputy()
+
+	log.Printf("New player joined, ID: %v", newPlayer)
 }
 
 // назначение заместителя

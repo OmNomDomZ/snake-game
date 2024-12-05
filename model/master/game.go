@@ -8,9 +8,8 @@ import (
 	"math/rand"
 )
 
-// генерация еды
+// GenerateFood генерация еды
 func (m *Master) GenerateFood() {
-	// TODO: написать функцию которая вычисляет только живых игроков
 	requireFood := m.Node.Config.GetFoodStatic() + int32(len(m.Node.State.Snakes))
 	currentFood := int32(len(m.Node.State.GetFoods()))
 
@@ -58,7 +57,7 @@ func (m *Master) isCellEmpty(x, y int32) bool {
 	return true
 }
 
-// обновление состояния игры
+// UpdateGameState обновление состояния игры
 func (m *Master) UpdateGameState() {
 	for _, snake := range m.Node.State.Snakes {
 		m.moveSnake(snake)
@@ -124,7 +123,7 @@ func (m *Master) isFoodEaten(head *pb.GameState_Coord) bool {
 	return false
 }
 
-// проверяем столкновения с другими змеями
+// Проверяем столкновения с другими змеями
 func (m *Master) checkCollisions() {
 	heads := make(map[string]int32)
 

@@ -2,9 +2,11 @@ package common
 
 import (
 	pb "SnakeGame/model/proto"
+	"fmt"
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -82,26 +84,26 @@ func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
 
 	n.SendMessage(ackMsg, addr)
 
-	switch msg.Type.(type) {
-	case *pb.GameMessage_Ping:
-		log.Printf("Sent AckMsg to %v in response to Ping", id)
-	case *pb.GameMessage_Steer:
-		log.Printf("Sent AckMsg to %v in response to Steer", id)
-	case *pb.GameMessage_State:
-		log.Printf("Sent AckMsg to %v in response to State", id)
-	case *pb.GameMessage_Join:
-		log.Printf("Sent AckMsg to %v in response to Join", id)
-	case *pb.GameMessage_Error:
-		log.Printf("Sent AckMsg to %v in response to Error", id)
-	case *pb.GameMessage_RoleChange:
-		log.Printf("Sent AckMsg to %v in response to RoleChange", id)
-	}
+	//switch msg.Type.(type) {
+	//case *pb.GameMessage_Ping:
+	//	log.Printf("Sent AckMsg to %v in response to Ping", id)
+	//case *pb.GameMessage_Steer:
+	//	log.Printf("Sent AckMsg to %v in response to Steer", id)
+	//case *pb.GameMessage_State:
+	//	log.Printf("Sent AckMsg to %v in response to State", id)
+	//case *pb.GameMessage_Join:
+	//	log.Printf("Sent AckMsg to %v in response to Join", id)
+	//case *pb.GameMessage_Error:
+	//	log.Printf("Sent AckMsg to %v in response to Error", id)
+	//case *pb.GameMessage_RoleChange:
+	//	log.Printf("Sent AckMsg to %v in response to RoleChange", id)
+	//}
 }
 
 // GetPlayerIdByAddress id игрока по адресу
 func (n *Node) GetPlayerIdByAddress(addr *net.UDPAddr) int32 {
 	if n.State == nil {
-		return 0
+		return 1
 	}
 	for _, player := range n.State.Players.Players {
 		if player.GetIpAddress() == addr.IP.String() && int(player.GetPort()) == addr.Port {
@@ -127,7 +129,6 @@ func (n *Node) GetPlayerIdByAddress(addr *net.UDPAddr) int32 {
 // SendMessage отправка сообщения и добавление его в неподтверждённые
 func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	// увеличиваем порядковый номер сообщения
-	//n.Mu.Lock()
 	switch msg.Type.(type) {
 	case *pb.GameMessage_Ack:
 
@@ -135,7 +136,6 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		msg.MsgSeq = proto.Int64(n.MsgSeq)
 		n.MsgSeq++
 	}
-	//n.Mu.Unlock()
 
 	// отправляем
 	data, err := proto.Marshal(msg)
@@ -151,24 +151,16 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	}
 
 	// добавляем сообщение в неподтверждённые
-	//n.Mu.Lock()
-	//defer n.Mu.Unlock()
-	//if !(n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port)) {
-	//switch msg.Type.(type) {
-	//case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
-	//
-	//default:
-	//	n.Mu.Lock()
-	//	n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
-	//		msg:       msg,
-	//		addr:      addr,
-	//		timestamp: time.Now(),
-	//	}
-	//
-	//	//log.Printf("Add msg to unconfirmed messages %v", msg.GetMsgSeq())
-	//	n.Mu.Unlock()
-	//}
-	//}
+	switch msg.Type.(type) {
+	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
+
+	default:
+		n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
+			msg:       msg,
+			addr:      addr,
+			timestamp: time.Now(),
+		}
+	}
 
 	//ip := addr.IP
 	//port := addr.Port
@@ -184,54 +176,46 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 
 // HandleAck обработка полученных AckMsg
 func (n *Node) HandleAck(seq int64) {
-	n.Mu.Lock()
-	defer n.Mu.Unlock()
 	if _, exists := n.unconfirmedMessages[seq]; exists {
 		delete(n.unconfirmedMessages, seq)
-		log.Printf("Received Ack for Seq: %d", seq)
 	}
 }
 
 // ResendUnconfirmedMessages проверка и переотправка неподтвержденных сообщений
-//func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
-//	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
-//	defer ticker.Stop()
-//
-//	for {
-//		select {
-//		// ответ не пришел, заново отправляем сообщение
-//		case <-ticker.C:
-//			now := time.Now()
-//			n.Mu.Lock()
-//			for seq, entry := range n.unconfirmedMessages {
-//				if now.Sub(entry.timestamp) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
-//					// переотправка сообщения
-//					data, err := proto.Marshal(entry.msg)
-//					if err != nil {
-//						log.Printf("Error marshalling Message: %v", err)
-//						continue
-//					}
-//					_, err = n.UnicastConn.WriteToUDP(data, entry.addr)
-//					if err != nil {
-//						fmt.Printf("Error sending Message: %v", err)
-//						continue
-//					}
-//
-//					entry.timestamp = time.Now()
-//					log.Printf("Resent message with Seq: %d to %v from %v", seq, entry.addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
-//					//log.Printf(entry.msg.String())
-//				}
-//			}
-//			n.Mu.Unlock()
-//		// ответ пришел, удаляем из мапы
-//		case seq := <-n.AckChan:
-//			log.Printf("Get seq %v", seq)
-//			n.Mu.Lock()
-//			defer n.Mu.Unlock()
-//			n.HandleAck(seq)
-//		}
-//	}
-//}
+func (n *Node) ResendUnconfirmedMessages(stateDelayMs int32) {
+	ticker := time.NewTicker(time.Duration(stateDelayMs/10) * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		// ответ не пришел, заново отправляем сообщение
+		case <-ticker.C:
+			now := time.Now()
+			for seq, entry := range n.unconfirmedMessages {
+				if now.Sub(entry.timestamp) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
+					// переотправка сообщения
+					data, err := proto.Marshal(entry.msg)
+					if err != nil {
+						log.Printf("Error marshalling Message: %v", err)
+						continue
+					}
+					_, err = n.UnicastConn.WriteToUDP(data, entry.addr)
+					if err != nil {
+						fmt.Printf("Error sending Message: %v", err)
+						continue
+					}
+
+					entry.timestamp = time.Now()
+					log.Printf("Resent message with Seq: %d to %v from %v", seq, entry.addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
+					log.Printf(entry.msg.String())
+				}
+			}
+		// ответ пришел, удаляем из мапы
+		case seq := <-n.AckChan:
+			n.HandleAck(seq)
+		}
+	}
+}
 
 // SendPings отправка PingMsg, если не было отправлено сообщений в течение stateDelayMs/10
 //func (n *Node) SendPings(stateDelayMs int32) {

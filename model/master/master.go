@@ -161,7 +161,7 @@ func (m *Master) Start() {
 	go m.receiveMulticastMessages()
 	//go m.checkTimeouts()
 	go m.sendStateMessage()
-	//go m.Node.ResendUnconfirmedMessages(m.Node.Config.GetStateDelayMs())
+	go m.Node.ResendUnconfirmedMessages(m.Node.Config.GetStateDelayMs())
 	//go m.Node.SendPings(m.Node.Config.GetStateDelayMs())
 }
 
@@ -223,7 +223,6 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 		}
 		m.Node.SendMessage(announcementMsg, addr)
 	default:
-		//log.Printf("PlayerInfo: Receive unknown multicast message from %v, type %v", addr, t)
 	}
 }
 
@@ -248,7 +247,6 @@ func (m *Master) receiveMessages() {
 			log.Printf("Get msg from itself")
 			continue
 		}
-		//log.Printf("Master: Received message: %v from %v", msg.String(), addr)
 		m.handleMessage(&msg, addr)
 	}
 }
@@ -268,7 +266,6 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 			m.Node.SendAck(msg, addr)
 		} else {
 			// обрабатываем joinMsg
-			log.Printf("Join msg")
 			joinMsg := t.Join
 			m.handleJoinMessage(msg.GetMsgSeq(), joinMsg, addr, coord)
 		}
@@ -279,7 +276,6 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 
 	case *pb.GameMessage_Steer:
 		playerId := msg.GetSenderId()
-		log.Printf("Steer msg")
 		if playerId == 0 {
 			playerId = m.Node.GetPlayerIdByAddress(addr)
 		}
@@ -300,8 +296,7 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ack:
-		log.Printf("Get Ack Msg from %v", msg.GetSenderId())
-		//m.Node.AckChan <- msg.GetMsgSeq()
+		m.Node.AckChan <- msg.GetMsgSeq()
 
 	case *pb.GameMessage_State:
 		log.Printf("State msg")
