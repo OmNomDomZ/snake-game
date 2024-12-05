@@ -19,7 +19,7 @@ func (m *Master) handleErrorMsg(addr *net.UDPAddr) {
 	m.Node.SendMessage(errorMsg, addr)
 }
 
-func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UDPAddr, coord *pb.GameState_Coord) {
+func (m *Master) handleJoinMessage(msgSeq int64, joinMsg *pb.GameMessage_JoinMsg, addr *net.UDPAddr, coord *pb.GameState_Coord) {
 	newPlayerID := int32(len(m.players.Players) + 1)
 	newPlayer := &pb.GamePlayer{
 		Name:      proto.String(joinMsg.GetPlayerName()),
@@ -34,7 +34,7 @@ func (m *Master) handleJoinMessage(joinMsg *pb.GameMessage_JoinMsg, addr *net.UD
 	m.Node.State.Players = m.players
 
 	ackMsg := &pb.GameMessage{
-		MsgSeq:     proto.Int64(m.Node.MsgSeq),
+		MsgSeq:     proto.Int64(msgSeq),
 		SenderId:   proto.Int32(1),
 		ReceiverId: proto.Int32(newPlayerID),
 		Type: &pb.GameMessage_Ack{

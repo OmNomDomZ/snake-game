@@ -210,7 +210,7 @@ func (m *Master) receiveMulticastMessages() {
 
 // обработка мультикаст сообщений
 func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
-	switch t := msg.Type.(type) {
+	switch /*t :=*/ msg.Type.(type) {
 	case *pb.GameMessage_Discover:
 		// пришел DiscoverMsg отправляем AnnouncementMsg
 		announcementMsg := &pb.GameMessage{
@@ -223,7 +223,7 @@ func (m *Master) handleMulticastMessage(msg *pb.GameMessage, addr *net.UDPAddr) 
 		}
 		m.Node.SendMessage(announcementMsg, addr)
 	default:
-		log.Printf("PlayerInfo: Receive unknown multicast message from %v, type %v", addr, t)
+		//log.Printf("PlayerInfo: Receive unknown multicast message from %v, type %v", addr, t)
 	}
 }
 
@@ -248,7 +248,7 @@ func (m *Master) receiveMessages() {
 			log.Printf("Get msg from itself")
 			continue
 		}
-		log.Printf("Master: Received message: %v from %v", msg.String(), addr)
+		//log.Printf("Master: Received message: %v from %v", msg.String(), addr)
 		m.handleMessage(&msg, addr)
 	}
 }
@@ -265,12 +265,12 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 			m.announcement.CanJoin = proto.Bool(false)
 			m.handleErrorMsg(addr)
 			log.Printf("Player cannot join: no available space")
-			//m.Node.SendAck(msg, addr)
+			m.Node.SendAck(msg, addr)
 		} else {
 			// обрабатываем joinMsg
 			log.Printf("Join msg")
 			joinMsg := t.Join
-			m.handleJoinMessage(joinMsg, addr, coord)
+			m.handleJoinMessage(msg.GetMsgSeq(), joinMsg, addr, coord)
 		}
 
 	case *pb.GameMessage_Discover:
@@ -281,11 +281,11 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		playerId := msg.GetSenderId()
 		log.Printf("Steer msg")
 		if playerId == 0 {
-			playerId = m.getPlayerIdByAddress(addr)
+			playerId = m.Node.GetPlayerIdByAddress(addr)
 		}
 		if playerId != 0 {
 			m.handleSteerMessage(t.Steer, playerId)
-			//m.Node.SendAck(msg, addr)
+			m.Node.SendAck(msg, addr)
 		} else {
 			log.Printf("SteerMsg received from unknown address: %v", addr)
 		}
@@ -293,14 +293,14 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	case *pb.GameMessage_RoleChange:
 		log.Printf("Role change msg")
 		m.handleRoleChangeMessage(msg, addr)
-		//m.Node.SendAck(msg, addr)
+		m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ping:
 		log.Printf("Ping msg")
-		//m.Node.SendAck(msg, addr)
+		m.Node.SendAck(msg, addr)
 
 	case *pb.GameMessage_Ack:
-		log.Printf("Ack msg")
+		log.Printf("Get Ack Msg from %v", msg.GetSenderId())
 		//m.Node.AckChan <- msg.GetMsgSeq()
 
 	case *pb.GameMessage_State:
@@ -310,21 +310,11 @@ func (m *Master) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		} else {
 			m.lastStateMsg = t.State.GetState().GetStateOrder()
 		}
-		//m.Node.SendAck(msg, addr)
+		m.Node.SendAck(msg, addr)
 
 	default:
 		log.Printf("Received unknown message type from %v", addr)
 	}
-}
-
-// id игрока по адресу
-func (m *Master) getPlayerIdByAddress(addr *net.UDPAddr) int32 {
-	for _, player := range m.players.Players {
-		if player.GetIpAddress() == addr.IP.String() && int(player.GetPort()) == addr.Port {
-			return player.GetId()
-		}
-	}
-	return 0
 }
 
 // рассылаем всем игрокам состояние игры

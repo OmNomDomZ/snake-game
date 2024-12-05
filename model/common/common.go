@@ -2,11 +2,9 @@ package common
 
 import (
 	pb "SnakeGame/model/proto"
-	"fmt"
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -65,24 +63,53 @@ func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPC
 }
 
 // SendAck любое сообщение подтверждается отправкой в ответ сообщения AckMsg с таким же msg_seq
-//func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
-//	switch msg.Type.(type) {
-//	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
-//		return
-//	}
-//
-//	ackMsg := &pb.GameMessage{
-//		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
-//		SenderId:   proto.Int32(n.PlayerInfo.GetId()),
-//		ReceiverId: proto.Int32(msg.GetSenderId()),
-//		Type: &pb.GameMessage_Ack{
-//			Ack: &pb.GameMessage_AckMsg{},
-//		},
-//	}
-//
-//	n.SendMessage(ackMsg, addr)
-//	log.Printf("Sent AckMsg to %v", addr)
-//}
+func (n *Node) SendAck(msg *pb.GameMessage, addr *net.UDPAddr) {
+	switch msg.Type.(type) {
+	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
+		return
+	}
+
+	id := n.GetPlayerIdByAddress(addr)
+
+	ackMsg := &pb.GameMessage{
+		MsgSeq:     proto.Int64(msg.GetMsgSeq()),
+		SenderId:   proto.Int32(n.PlayerInfo.GetId()),
+		ReceiverId: proto.Int32(id),
+		Type: &pb.GameMessage_Ack{
+			Ack: &pb.GameMessage_AckMsg{},
+		},
+	}
+
+	n.SendMessage(ackMsg, addr)
+
+	switch msg.Type.(type) {
+	case *pb.GameMessage_Ping:
+		log.Printf("Sent AckMsg to %v in response to Ping", id)
+	case *pb.GameMessage_Steer:
+		log.Printf("Sent AckMsg to %v in response to Steer", id)
+	case *pb.GameMessage_State:
+		log.Printf("Sent AckMsg to %v in response to State", id)
+	case *pb.GameMessage_Join:
+		log.Printf("Sent AckMsg to %v in response to Join", id)
+	case *pb.GameMessage_Error:
+		log.Printf("Sent AckMsg to %v in response to Error", id)
+	case *pb.GameMessage_RoleChange:
+		log.Printf("Sent AckMsg to %v in response to RoleChange", id)
+	}
+}
+
+// GetPlayerIdByAddress id игрока по адресу
+func (n *Node) GetPlayerIdByAddress(addr *net.UDPAddr) int32 {
+	if n.State == nil {
+		return 0
+	}
+	for _, player := range n.State.Players.Players {
+		if player.GetIpAddress() == addr.IP.String() && int(player.GetPort()) == addr.Port {
+			return player.GetId()
+		}
+	}
+	return -1
+}
 
 // SendPing отправка
 //func (n *Node) SendPing(addr *net.UDPAddr) {
@@ -99,14 +126,15 @@ func NewNode(state *pb.GameState, config *pb.GameConfig, multicastConn *net.UDPC
 
 // SendMessage отправка сообщения и добавление его в неподтверждённые
 func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
-	//if n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port) {
-	//	return
-	//}
-
 	// увеличиваем порядковый номер сообщения
 	//n.Mu.Lock()
-	msg.MsgSeq = proto.Int64(n.MsgSeq)
-	n.MsgSeq++
+	switch msg.Type.(type) {
+	case *pb.GameMessage_Ack:
+
+	default:
+		msg.MsgSeq = proto.Int64(n.MsgSeq)
+		n.MsgSeq++
+	}
 	//n.Mu.Unlock()
 
 	// отправляем
@@ -126,30 +154,32 @@ func (n *Node) SendMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	//n.Mu.Lock()
 	//defer n.Mu.Unlock()
 	//if !(n.PlayerInfo.GetIpAddress() == addr.IP.String() && n.PlayerInfo.GetPort() == int32(addr.Port)) {
-	//	switch msg.Type.(type) {
-	//	case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
+	//switch msg.Type.(type) {
+	//case *pb.GameMessage_Announcement, *pb.GameMessage_Discover, *pb.GameMessage_Ack:
 	//
-	//	default:
-	//		//n.Mu.Lock()
-	//		n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
-	//			msg:       msg,
-	//			addr:      addr,
-	//			timestamp: time.Now(),
-	//		}
-	//		//n.Mu.Unlock()
+	//default:
+	//	n.Mu.Lock()
+	//	n.unconfirmedMessages[msg.GetMsgSeq()] = &MessageEntry{
+	//		msg:       msg,
+	//		addr:      addr,
+	//		timestamp: time.Now(),
 	//	}
+	//
+	//	//log.Printf("Add msg to unconfirmed messages %v", msg.GetMsgSeq())
+	//	n.Mu.Unlock()
+	//}
 	//}
 
-	ip := addr.IP
-	port := addr.Port
-	address := fmt.Sprintf("%s:%d", ip, port)
+	//ip := addr.IP
+	//port := addr.Port
+	//address := fmt.Sprintf("%s:%d", ip, port)
 	//n.LastSent[address] = time.Now()
-	log.Printf("Sent message %v with Seq: %d to %v from %v", msg.Type, msg.GetMsgSeq(), addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
+	//log.Printf("Sent message %v with Seq: %d to %v from %v", msg.Type, msg.GetMsgSeq(), addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
 
-	if n.PlayerInfo.GetIpAddress() == addr.IP.String() &&
-		n.PlayerInfo.GetPort() == int32(addr.Port) {
-		n.LastSent[address] = time.Now()
-	}
+	//if n.PlayerInfo.GetIpAddress() == addr.IP.String() &&
+	//	n.PlayerInfo.GetPort() == int32(addr.Port) {
+	//	n.LastSent[address] = time.Now()
+	//}
 }
 
 // HandleAck обработка полученных AckMsg
@@ -189,14 +219,15 @@ func (n *Node) HandleAck(seq int64) {
 //
 //					entry.timestamp = time.Now()
 //					log.Printf("Resent message with Seq: %d to %v from %v", seq, entry.addr, n.PlayerInfo.GetIpAddress()+":"+strconv.Itoa(int(n.PlayerInfo.GetPort())))
-//					log.Printf(entry.msg.String())
+//					//log.Printf(entry.msg.String())
 //				}
 //			}
 //			n.Mu.Unlock()
 //		// ответ пришел, удаляем из мапы
 //		case seq := <-n.AckChan:
-//			//n.Mu.Lock()
-//			//defer n.Mu.Unlock()
+//			log.Printf("Get seq %v", seq)
+//			n.Mu.Lock()
+//			defer n.Mu.Unlock()
 //			n.HandleAck(seq)
 //		}
 //	}
@@ -232,45 +263,4 @@ func (n *Node) HandleAck(seq int64) {
 //		}
 //		n.Mu.Unlock()
 //	}
-//}
-
-//// обработка SteerMsg
-//func (n *Node) HandleSteerMessage(steerMsg *pb.GameMessage_SteerMsg, playerId int32) {
-//	var snake *pb.GameState_Snake
-//	for _, s := range n.State.Snakes {
-//		if s.GetPlayerId() == playerId {
-//			snake = s
-//			break
-//		}
-//	}
-//
-//	if snake == nil {
-//		log.Printf("No snake found for player ID: %d", playerId)
-//		return
-//	}
-//
-//	newDirection := steerMsg.GetDirection()
-//	currentDirection := snake.GetHeadDirection()
-//
-//	isOppositeDirection := func(cur, new pb.Direction) bool {
-//		switch cur {
-//		case pb.Direction_UP:
-//			return new == pb.Direction_DOWN
-//		case pb.Direction_DOWN:
-//			return new == pb.Direction_UP
-//		case pb.Direction_LEFT:
-//			return new == pb.Direction_RIGHT
-//		case pb.Direction_RIGHT:
-//			return new == pb.Direction_LEFT
-//		}
-//		return false
-//	}(currentDirection, newDirection)
-//
-//	if isOppositeDirection {
-//		log.Printf("Invalid direction change from player ID: %d", playerId)
-//		return
-//	}
-//
-//	snake.HeadDirection = newDirection.Enum()
-//	log.Printf("Player ID: %d changed direction to: %v", playerId, newDirection)
 //}

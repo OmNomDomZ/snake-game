@@ -202,17 +202,17 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 	p.Node.Mu.Lock()
 	defer p.Node.Mu.Unlock()
 	p.Node.LastInteraction[msg.GetSenderId()] = time.Now()
-	//p.Node.Mu.Unlock()
 	switch t := msg.Type.(type) {
 	case *pb.GameMessage_Ack:
 		if !p.haveId {
 			p.Node.PlayerInfo.Id = proto.Int32(msg.GetReceiverId())
+			log.Printf("Joined game with ID: %d", p.Node.PlayerInfo.GetId())
 			//p.Node.AckChan <- msg.GetMsgSeq()
 			p.haveId = true
-			log.Printf("Joined game with ID: %d", p.Node.PlayerInfo.GetId())
 		} else {
 			//p.Node.AckChan <- msg.GetMsgSeq()
 		}
+		log.Printf("Get Ack Msg from %v", msg.GetSenderId())
 	case *pb.GameMessage_Announcement:
 		p.MasterAddr = addr
 		p.AnnouncementMsg = t.Announcement
@@ -225,18 +225,18 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 			p.LastStateMsg = t.State.GetState().GetStateOrder()
 		}
 		p.Node.State = t.State.GetState()
-		//p.Node.SendAck(msg, addr)
-		log.Printf("Received StateMsg with state_order: %d", p.Node.State.GetStateOrder())
+		p.Node.SendAck(msg, addr)
+		//log.Printf("Received StateMsg with state_order: %d", p.Node.State.GetStateOrder())
 		p.Node.Cond.Broadcast()
 	case *pb.GameMessage_Error:
-		//p.Node.SendAck(msg, addr)
+		p.Node.SendAck(msg, addr)
 		log.Printf("Error from server: %s", t.Error.GetErrorMessage())
 	case *pb.GameMessage_RoleChange:
 		p.handleRoleChangeMessage(msg)
-		//p.Node.SendAck(msg, addr)
+		p.Node.SendAck(msg, addr)
 	case *pb.GameMessage_Ping:
 		// Отправляем AckMsg в ответ
-		//p.Node.SendAck(msg, addr)
+		p.Node.SendAck(msg, addr)
 	default:
 		log.Printf("Received unknown message")
 	}
