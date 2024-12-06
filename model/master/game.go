@@ -6,6 +6,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log"
 	"math/rand"
+	"net"
 )
 
 // GenerateFood генерация еды
@@ -204,6 +205,37 @@ func (m *Master) killSnake(crashedPlayerId, killer int32) {
 				player.Score = proto.Int32(player.GetScore() + 1)
 				break
 			}
+		}
+	}
+
+	if crashedPlayerId != m.Node.PlayerInfo.GetId() {
+		// Сохраняем адрес игрока, чтобы отправить ему ErrorMsg
+		var crashedPlayerAddr *net.UDPAddr
+		for _, player := range m.players.Players {
+			if player.GetId() == crashedPlayerId {
+				addrStr := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
+				addr, err := net.ResolveUDPAddr("udp", addrStr)
+				if err == nil {
+					crashedPlayerAddr = addr
+				}
+				break
+			}
+		}
+
+		m.removePlayer(crashedPlayerId)
+		log.Printf("Player ID: %d has crashed and been removed.", crashedPlayerId)
+
+		// Отправляем ErrorMsg упавшему игроку, чтобы он у себя вызвал os.Exit(0)
+		if crashedPlayerAddr != nil {
+			errorMsg := &pb.GameMessage{
+				MsgSeq: proto.Int64(m.Node.MsgSeq),
+				Type: &pb.GameMessage_Error{
+					Error: &pb.GameMessage_ErrorMsg{
+						ErrorMessage: proto.String("You have crashed and been removed from the game. Exiting..."),
+					},
+				},
+			}
+			m.Node.SendMessage(errorMsg, crashedPlayerAddr)
 		}
 	}
 }

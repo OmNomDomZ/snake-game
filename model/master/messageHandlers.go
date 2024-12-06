@@ -180,11 +180,11 @@ func (m *Master) removePlayer(playerId int32) {
 		return
 	}
 
-	if removedPlayer.GetRole() != pb.NodeRole_VIEWER {
-		// Удаляем только если игрок не VIEWER
-		m.players.Players = append(m.players.Players[:index], m.players.Players[index+1:]...)
-		delete(m.Node.LastSent, fmt.Sprintf("%s:%d", removedPlayer.GetIpAddress(), removedPlayer.GetPort()))
-	}
+	//if removedPlayer.GetRole() != pb.NodeRole_VIEWER {
+	// Удаляем только если игрок не VIEWER
+	m.players.Players = append(m.players.Players[:index], m.players.Players[index+1:]...)
+	delete(m.Node.LastSent, fmt.Sprintf("%s:%d", removedPlayer.GetIpAddress(), removedPlayer.GetPort()))
+	//}
 
 	// Если игрок был DEPUTY, назначаем нового
 	if removedPlayer.GetRole() == pb.NodeRole_DEPUTY {
@@ -196,6 +196,8 @@ func (m *Master) removePlayer(playerId int32) {
 		m.makeSnakeZombie(playerId)
 	}
 	log.Printf("Player ID: %d processed for removal or role change", playerId)
+
+	m.Node.State.Players = m.players
 }
 
 func (m *Master) findNewDeputy() {

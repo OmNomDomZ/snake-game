@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
+	"os"
 	"time"
 )
 
@@ -164,6 +165,7 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		p.Node.AckChan <- msg.GetMsgSeq()
 	case *pb.GameMessage_Announcement:
 		p.MasterAddr = addr
+		p.Node.MasterAddr = addr
 		p.AnnouncementMsg = t.Announcement
 		log.Printf("Received AnnouncementMsg from %v via unicast", addr)
 		p.sendJoinRequest()
@@ -178,7 +180,10 @@ func (p *Player) handleMessage(msg *pb.GameMessage, addr *net.UDPAddr) {
 		p.Node.Cond.Broadcast()
 	case *pb.GameMessage_Error:
 		p.Node.SendAck(msg, addr)
-		log.Printf("Error from server: %s", t.Error.GetErrorMessage())
+		if t.Error.GetErrorMessage() == "You have crashed and been removed from the game. Exiting..." {
+			log.Printf("Received crash notification: %s", t.Error.GetErrorMessage())
+			os.Exit(0)
+		}
 	case *pb.GameMessage_RoleChange:
 		p.handleRoleChangeMessage(msg)
 		p.Node.SendAck(msg, addr)

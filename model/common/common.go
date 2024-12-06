@@ -31,6 +31,8 @@ type Node struct {
 	MsgSeq           int64
 	Role             pb.NodeRole
 
+	MasterAddr *net.UDPAddr
+
 	// время последнего сообщения от игрока [playerId]time
 	LastInteraction map[int32]time.Time
 	// время отправки последнего сообщения игроку отправок сообщений
@@ -260,20 +262,33 @@ func (n *Node) SendPings(stateDelayMs int32) {
 		if n.State == nil {
 			continue
 		}
-		for _, player := range n.State.Players.Players {
-			if player.GetId() == n.PlayerInfo.GetId() {
-				continue
-			}
-			addrKey := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
-			last, exists := n.LastSent[addrKey]
-			if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
-				playerAddr, err := net.ResolveUDPAddr("udp", addrKey)
-				if err != nil {
-					log.Printf("Error resolving address for Ping: %v", err)
+		if n.Role == pb.NodeRole_MASTER {
+			// Мастер пингует всех игроков, кроме себя
+			for _, player := range n.State.Players.Players {
+				if player.GetId() == n.PlayerInfo.GetId() {
 					continue
 				}
-				n.SendPing(playerAddr)
-				n.LastSent[addrKey] = now
+				addrKey := fmt.Sprintf("%s:%d", player.GetIpAddress(), player.GetPort())
+				last, exists := n.LastSent[addrKey]
+				if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
+					playerAddr, err := net.ResolveUDPAddr("udp", addrKey)
+					if err != nil {
+						log.Printf("Error resolving address for Ping: %v", err)
+						continue
+					}
+					n.SendPing(playerAddr)
+					n.LastSent[addrKey] = now
+				}
+			}
+		} else {
+			// Обычный игрок пингует только мастера, если мастер известен
+			if n.MasterAddr != nil {
+				addrKey := n.MasterAddr.String()
+				last, exists := n.LastSent[addrKey]
+				if !exists || now.Sub(last) > time.Duration(n.Config.GetStateDelayMs()/10)*time.Millisecond {
+					n.SendPing(n.MasterAddr)
+					n.LastSent[addrKey] = now
+				}
 			}
 		}
 	}
